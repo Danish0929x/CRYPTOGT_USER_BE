@@ -34,7 +34,7 @@ exports.register = async (req, res) => {
         .json({ success: false, message: "Invalid referrer ID" });
     }
 
-    const userId = `CGT${Math.floor(10000 + Math.random() * 90000)}`; // Generate user ID
+    const userId = `CGT${Math.floor(1000000 + Math.random() * 90000)}`; // Generate user ID
 
     const encryptedPassword = encrypt(password); // Encrypt password (instead of hashing)
 
