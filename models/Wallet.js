@@ -7,13 +7,7 @@ const walletSchema = new mongoose.Schema({
     unique: true,
     ref: 'User'
   },
-  USDTBalance: {
-    type: Number,
-    required: true,
-    default: 0,
-    min: 0
-  },
-  depositBalance: {
+  CGTBalance: {
     type: Number,
     required: true,
     default: 0,

@@ -1,32 +1,31 @@
 const mongoose = require('mongoose');
 
 const userSchema = new mongoose.Schema({
+  wallet_address: {
+    type: String,
+    required: true,
+    unique: true
+  },
   userId: {
     type: String,
     required: true,
     unique: true
   },
-  fullname: {
+  name: {
     type: String,
-    required: true
+    default: null
   },
   email: {
     type: String,
-    required: true,
-    unique: true
+    default: null
   },
   phone: {
     type: String,
-    required: true
+    default: null
   },
-  password: {
+  referral_id: {
     type: String,
-    required: true
-  },
-  referrer: { 
-    type: String,
-    required: true
-    // default: null
+    // required: true
   },
   verified: {
     type: Boolean,

@@ -5,8 +5,7 @@ const authMiddleware = require('../middlewares/authMiddleware');
 
 // Protected routes (require authentication)
 router.get('/getuser', authMiddleware, userController.getUser);
-router.put('/update-profile', authMiddleware, userController.updateProfile);
-router.get('/get-profile', authMiddleware, userController.getProfile);
+router.put('/update-user', authMiddleware, userController.updateUser);
 router.get('/get-wallet', authMiddleware, userController.getWallet);
 
 module.exports = router;
