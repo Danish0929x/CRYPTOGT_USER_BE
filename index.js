@@ -27,6 +27,8 @@ app.use('/api/auth', require('./routes/authRoutes'));
 
 app.use('/api/user', require('./routes/userRoutes'));
 
+app.use('/api/package', require('./routes/packageRoutes'));
+
 
 // Simple health check
 app.get('/', (req, res) => {
