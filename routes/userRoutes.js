@@ -7,5 +7,6 @@ const authMiddleware = require('../middlewares/authMiddleware');
 router.get('/getuser', authMiddleware, userController.getUser);
 router.put('/update-user', authMiddleware, userController.updateUser);
 router.get('/get-wallet', authMiddleware, userController.getWallet);
+router.get('/get-dashboard', authMiddleware, userController.getDashboard);
 
 module.exports = router;
