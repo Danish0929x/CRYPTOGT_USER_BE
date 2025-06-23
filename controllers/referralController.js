@@ -9,31 +9,29 @@ async function getReferralDetails(req, res) {
     if (!id) {
       return res.status(400).json({
         success: false,
-        message: "Referral ID is required",
+        message: "User ID is required",
       });
     }
 
-    const user = await User.findOne({ parentId: id });
+    const user = await User.findOne({ userId: id });
 
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: "Referral not found",
+        message: "User not found",
       });
     }
 
     res.status(200).json({
       success: true,
-      message: "Referral details fetched successfully",
+      message: "User details fetched successfully",
       data: {
         name: user.name,
-        walletAddress: user.walletAddress,
         userId: user.userId,
-        status: user.status
       },
     });
   } catch (error) {
-    console.error("Error fetching referral details:", error);
+    console.error("Error fetching user details:", error);
     res.status(500).json({
       success: false,
       message: "Server error",
@@ -148,7 +146,7 @@ async function getReferralStats(req, res) {
     const [directReferrals, totalNetwork, activeInvestors] = await Promise.all([
       User.countDocuments({ parentId: userId }),
       getNetworkTree(userId, 10).then(res => res.length),
-      Package.countDocuments({ userId, status: "Active" })
+      Package.countDocuments({ userId, status: "true" })
     ]);
 
     res.status(200).json({

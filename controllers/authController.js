@@ -53,7 +53,7 @@ exports.register = async (req, res) => {
       parentId,
       verified: true,
       rewardStatus: "User", // Default status
-      blockStatus: true // Default from model
+      blockStatus: false // Default from model
     });
 
     // Create wallet with all required fields

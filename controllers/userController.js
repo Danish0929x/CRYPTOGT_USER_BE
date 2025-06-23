@@ -143,7 +143,8 @@ exports.getWallet = async (req, res) => {
       walletAddress: user.walletAddress,
       userId: user.userId,
       CGTBalance: wallet.CGTBalance,
-      depositBalance: wallet.depositBalance || 0,
+      autopoolBalance: wallet.autopoolBalance,
+      utilityBalance: wallet.utilityBalance,
       createdAt:      wallet.createdAt,
       lastUpdated: wallet.updatedAt,
     };
