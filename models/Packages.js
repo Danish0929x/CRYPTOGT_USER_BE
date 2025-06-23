@@ -6,40 +6,36 @@ const packageSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
-   name: {
+  packageType: {
     type: String,
     required: true,
-    enum: ['Silver', 'Gold'] 
+    enum: ['Leader', 'Investor'],
+    default: 'Leader'
   },
   packageAmount: {
     type: Number,
     required: true
   },
-  daily_roi: {
+  poi: {
     type: Number,
     required: true
   },
-  monthly_roi: {
-    type: Number,
-    required: true
+  booster: {
+    type: Boolean,
+    default: false
   },
-  duration: {
-    type: Number, // in days?
-    required: true
+  productVoucher: {
+    type: Boolean,
+    default: false
   },
   startDate: {
     type: Date,
     required: true,
     default: Date.now,
   },
-  endDate: {
-    type: Date, // calculated based on duration
-    default: null,                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
-  },
   status: {
-    type: String,
-    enum: ["Active", "Inactive"],
-    default: "Active"
+    type: Boolean,
+    default: true
   }
   
 }, { timestamps: true });

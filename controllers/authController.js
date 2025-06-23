@@ -2,21 +2,21 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const Wallet = require("../models/Wallet");
 
-//ROUTE: 1 Registering a user using: POST "/api/auth/register". It Doesn't require auth
+// ROUTE: 1 Registering a user using: POST "/api/auth/register". It Doesn't require auth
 exports.register = async (req, res) => {
   try {
-    const { name, phone, email, wallet_address,  } = req.body;
+    const { name, phone, email, walletAddress, parentId } = req.body;
 
     // Validate required fields
-    if (!wallet_address ) {
+    if (!walletAddress) {
       return res.status(400).json({ 
         success: false, 
-        message: "Wallet address and referral ID are required" 
+        message: "Wallet address is required" 
       });
     }
 
     // Check if wallet address already exists
-    const existingUser = await User.findOne({ wallet_address });
+    const existingUser = await User.findOne({ walletAddress });
     if (existingUser) {
       return res.status(400).json({ 
         success: false, 
@@ -24,35 +24,44 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Verify referrer exists (if needed)
-    // const referrerUser = await User.findOne({ userId: referral_id });
-    // if (!referrerUser) {
-    //   return res.status(400).json({ 
-    //     success: false, 
-    //     message: "Invalid referral ID" 
-    //   });
-    // }
+    // Verify parent user exists (parentId is required in model)
+    if (!parentId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Parent ID is required" 
+      });
+    }
+
+    const parentUser = await User.findOne({ userId: parentId });
+    if (!parentUser) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Invalid parent ID" 
+      });
+    }
 
     // Generate user ID
-    const userId = `CGT${Math.floor(1000000 + Math.random() * 90000)}`;
+    const userId = `CGT${Math.floor(1000000 + Math.random() * 900000)}`;
 
-    // Create user
+    // Create user with required fields from model
     const user = await User.create({
-      wallet_address,
+      walletAddress,
       userId,
-      name,
-      email,
-      phone,
-      // referral_id,
+      name: name || null,
+      email: email || null,
+      phone: phone || null,
+      parentId,
       verified: true,
-      status: "Active"
+      rewardStatus: "User", // Default status
+      blockStatus: true // Default from model
     });
 
-
-    // Create wallet (if still needed)
+    // Create wallet with all required fields
     await Wallet.create({
       userId,
       CGTBalance: 0,
+      autopoolBalance: 0,
+      utilityBalance: 0
     });
 
     // Return response
@@ -60,13 +69,14 @@ exports.register = async (req, res) => {
       success: true,
       message: "Registration successful",
       data: {
-        wallet_address,
+        walletAddress,
         userId,
-        // referral_id,
+        parentId,
         name,
         email,
         phone,
-        status: "Active"
+        rewardStatus: "User",
+        verified: true
       }
     });
   } catch (err) {
@@ -77,14 +87,13 @@ exports.register = async (req, res) => {
   }
 };
 
-
-//ROUTE: 2 Authenticate a user using: POST "/api/auth/login". It Doesn't require auth
+// ROUTE: 2 Authenticate a user using: POST "/api/auth/login". It Doesn't require auth
 exports.login = async (req, res) => {
   try {
-    const { wallet_address } = req.body;
+    const { walletAddress } = req.body;
 
     // Validate required field
-    if (!wallet_address) {
+    if (!walletAddress) {
       return res.status(400).json({ 
         success: false,
         message: "Wallet address is required" 
@@ -92,7 +101,7 @@ exports.login = async (req, res) => {
     }
 
     // Find user by wallet address
-    const user = await User.findOne({ wallet_address });
+    const user = await User.findOne({ walletAddress });
     if (!user) {
       return res.status(404).json({ 
         success: false,
@@ -100,11 +109,19 @@ exports.login = async (req, res) => {
       });
     }
 
+    // Check if user is blocked
+    if (user.blockStatus === true) {
+      return res.status(403).json({
+        success: false,
+        message: "Account is blocked"
+      });
+    }
+
     // Generate JWT token
     const token = jwt.sign(
       { 
         userId: user.userId, 
-        wallet_address: user.wallet_address,
+        walletAddress: user.walletAddress,
         id: user._id 
       }, 
       process.env.JWT_SECRET, 
@@ -127,8 +144,7 @@ exports.login = async (req, res) => {
   }
 };
 
-
-//ROUTE: 4 Logout a user: POST "/api/auth/logoutUser". It requires auth
+// ROUTE: 3 Logout a user: POST "/api/auth/logoutUser". It requires auth
 exports.logoutUser = async (req, res) => {
   try {
     res.clearCookie("token", {
@@ -146,4 +162,4 @@ exports.logoutUser = async (req, res) => {
       message: "Error during logout",
     });
   }
-}
+};

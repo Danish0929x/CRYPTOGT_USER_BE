@@ -7,16 +7,16 @@ const Transaction = require("../models/Transaction");
 // ROUTE: 1 Get logged in user details using wallet address
 exports.getUser = async (req, res) => {
   try {
-    const wallet_address = req.user.wallet_address;
+    const walletAddress = req.user.walletAddress;
 
-    if (!wallet_address) {
+    if (!walletAddress) {
       return res.status(400).json({
         success: false,
         message: "Wallet address is required",
       });
     }
 
-    const user = await User.findOne({ wallet_address });
+    const user = await User.findOne({ walletAddress });
 
     if (!user) {
       return res.status(404).json({
@@ -29,12 +29,12 @@ exports.getUser = async (req, res) => {
       success: true,
       message: "User details fetched successfully",
       data: {
-        wallet_address: user.wallet_address,
+        walletAddress: user.walletAddress,
         userId: user.userId,
         name: user.name,
         email: user.email,
         phone: user.phone,
-        referral_id: user.referral_id,
+        parentId: user.parentId,
         status: user.status
       },
     });
@@ -50,12 +50,12 @@ exports.getUser = async (req, res) => {
 
 // ROUTE: 2 Update profile using wallet address
 exports.updateUser = async (req, res) => {
-  const wallet_address = req.user.wallet_address;
+  const walletAddress = req.user.walletAddress;
   try {
     const { name, phone, email } = req.body;
 
-    // Validate wallet_address matches authenticated user
-    if (!wallet_address) {
+    // Validate walletAddress matches authenticated user
+    if (!walletAddress) {
       return res.status(403).json({
         success: false,
         message: "Unauthorized to update this profile",
@@ -77,7 +77,7 @@ exports.updateUser = async (req, res) => {
     }
 
     const updatedUser = await User.findOneAndUpdate(
-      { wallet_address },
+      { walletAddress },
       updates,
       { new: true, runValidators: true }
     );
@@ -97,7 +97,7 @@ exports.updateUser = async (req, res) => {
         name: updatedUser.name,
         email: updatedUser.email,
         phone: updatedUser.phone,
-        wallet_address: updatedUser.wallet_address
+        walletAddress: updatedUser.walletAddress
       }
     });
 
@@ -114,16 +114,16 @@ exports.updateUser = async (req, res) => {
 // ROUTE 4: Get user wallet using wallet address
 exports.getWallet = async (req, res) => {
   try {
-    const wallet_address = req.user.wallet_address;
+    const walletAddress = req.user.walletAddress;
     
-    if (!wallet_address) {
+    if (!walletAddress) {
       return res.status(400).json({
         success: false,
         message: "Wallet address is required",
       });
     }
 
-    const user = await User.findOne({ wallet_address });
+    const user = await User.findOne({ walletAddress });
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -140,7 +140,7 @@ exports.getWallet = async (req, res) => {
     }
 
     const walletData = {
-      wallet_address: user.wallet_address,
+      walletAddress: user.walletAddress,
       userId: user.userId,
       CGTBalance: wallet.CGTBalance,
       depositBalance: wallet.depositBalance || 0,
@@ -168,9 +168,9 @@ exports.getWallet = async (req, res) => {
 // ROUTE: Get Dashboard Data including all packages
 exports.getDashboard = async (req, res) => {
   try {
-    const wallet_address = req.user.wallet_address;
+    const walletAddress = req.user.walletAddress;
 
-    if (!wallet_address) {
+    if (!walletAddress) {
       return res.status(400).json({
         success: false,
         message: "Wallet address is required",
@@ -178,7 +178,7 @@ exports.getDashboard = async (req, res) => {
     }
 
     // Get user details
-    const user = await User.findOne({ wallet_address });
+    const user = await User.findOne({ walletAddress });
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -261,8 +261,8 @@ exports.getDashboard = async (req, res) => {
         userId: user.userId,
         name: user.name,
         email: user.email,
-        wallet_address: user.wallet_address,
-        referral_id: user.referral_id,
+        walletAddress: user.walletAddress,
+        parentId: user.parentId,
         status: user.status,
         joinDate: user.createdAt,
       },

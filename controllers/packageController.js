@@ -1,48 +1,62 @@
-const Package = require('../models/Packages');
+const Package = require('../models/Packages'); 
+const { distributeDirectBonus } = require("../functions/directDistributeBonus");
 
 exports.createPackage = async (req, res) => {
   try {
-     const userId = req.user.userId; // Get userId from the request
+    const userId = req.user.userId;
     const { packageAmount } = req.body;
 
     if (!userId || !packageAmount) {
-      return res.status(400).json({ message: "User ID and package amount are required" });
+      return res.status(400).json({ 
+        success: false,
+        message: "User ID and package amount are required" 
+      });
     }
 
-    // Create a new package
+    // Determine package type and ROI based on amount
+    const packageType = packageAmount <= 1000 ? "Leader" : "Investor";
+
+    // Create new package according to model
     const newPackage = new Package({
       userId,
-      name: packageAmount >= 1000 ? "Gold" : "Silver", // Determine package type based on amount
+      packageType,
       packageAmount,
-      daily_roi: 0,
-      monthly_roi: 0,
-      duration: 500 ,
+      poi: 0, 
       startDate: new Date(),
-      endDate: new Date(Date.now() + 500 * 24 * 60 * 60 * 1000), // Set end date based on duration
-      status: "Active"
+      status: true // Using boolean true instead of string
     });
 
-    // Save the new package to the database
     await newPackage.save();
 
-    // Respond with success
+    // Distribute direct bonus to parent
+    await distributeDirectBonus(packageAmount, userId);
+
     res.status(201).json({
-      message: "Package created successfully and bonus distributed",
-      data: newPackage
+      success: true,
+      message: "Package created successfully",
+      data: {
+        packageId: newPackage._id,
+        packageType: newPackage.packageType,
+        packageAmount: newPackage.packageAmount,
+        roi: newPackage.roi,
+        startDate: newPackage.startDate
+      }
     });
 
   } catch (err) {
     console.error("Error creating package:", err);
-    res.status(500).json({ message: "Server Error", error: err.message });
+    res.status(500).json({ 
+      success: false,
+      message: "Server Error", 
+      error: err.message 
+    });
   }
 };
 
 exports.getPackagesByUserId = async (req, res) => {
   try {
-
     const userId = req.user.userId;
 
-    // Validate userId
     if (!userId) {
       return res.status(400).json({
         success: false,
@@ -50,17 +64,22 @@ exports.getPackagesByUserId = async (req, res) => {
       });
     }
 
-    // Find all packages for the user
     const packages = await Package.find({ userId })
-      .sort({ startDate: -1 }) // Sort by newest first
-      .select('packageAmount startDate status createdAt');
-
-
+      .sort({ startDate: -1 })
+      .select('packageType packageAmount roi startDate status createdAt');
 
     res.status(200).json({
       success: true,
       message: "Packages retrieved successfully",
-      data: packages
+      data: packages.map(pkg => ({
+        id: pkg._id,
+        type: pkg.packageType,
+        amount: pkg.packageAmount,
+        roi: pkg.roi,
+        startDate: pkg.startDate,
+        status: pkg.status ? "Active" : "Inactive",
+        createdAt: pkg.createdAt
+      }))
     });
 
   } catch (error) {

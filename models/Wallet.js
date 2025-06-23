@@ -4,15 +4,36 @@ const walletSchema = new mongoose.Schema({
   userId: {
     type: String,
     required: true,
-    unique: true,
-    ref: 'User'
   },
   CGTBalance: {
     type: Number,
     required: true,
     default: 0,
-    min: 0
-  }
+  },
+  autopoolBalance: {
+    type: Number,
+    default: 0,
+  },
+  utilityBalance: {
+    type: Number,
+    default: 0,
+  },
 }, { timestamps: true });
+
+// Round to 5 decimals before saving
+walletSchema.pre('save', function (next) {
+  const round = (num) => {
+    if (typeof num === 'number') {
+      return Number(num.toFixed(5));
+    }
+    return num;
+  };
+
+  this.CGTBalance = round(this.CGTBalance);
+  this.autopoolBalance = round(this.autopoolBalance);
+  this.utilityBalance = round(this.utilityBalance);
+
+  next();
+});
 
 module.exports = mongoose.model('Wallet', walletSchema);

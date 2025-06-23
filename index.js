@@ -31,6 +31,8 @@ app.use('/api/user', require('./routes/userRoutes'));
 
 app.use('/api/package', require('./routes/packageRoutes'));
 
+app.use('/api/referral', require('./routes/referralRoutes'));
+
 
 // Simple health check
 app.get('/', (req, res) => {

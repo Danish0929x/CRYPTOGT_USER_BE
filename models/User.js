@@ -1,41 +1,64 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
-const userSchema = new mongoose.Schema({
-  wallet_address: {
-    type: String,
-    required: true,
-    unique: true
+const userSchema = new mongoose.Schema(
+  {
+    walletAddress: {
+      type: String,
+      required: true,
+      unique: true,
+    },
+    userId: {
+      type: String,
+      required: true,
+      unique: true,
+    },
+    name: {
+      type: String,
+      default: null,
+    },
+    email: {
+      type: String,
+      default: null,
+    },
+    phone: {
+      type: String,
+      default: null,
+    },
+    parentId: {
+      type: String,
+      required: true,
+    },
+    verified: {
+      type: Boolean,
+      default: true,
+    },
+    rewardStatus: {
+      type: String,
+      enum: [
+        "User",
+        "Associate",
+        "Team Leader",
+        "Supervisor",
+        "General Manager",
+        "Director",
+        "President",
+        "Star President",
+        "Crown Star",
+        "Chairman",
+      ],
+      required: true,
+    },
+
+    blockStatus: {
+      type: Boolean,
+      default: false, // Default to false
+    },
+    isRewardBlock: {
+      type: Boolean,
+      default: false, // Default to false
+    },
   },
-  userId: {
-    type: String,
-    required: true,
-    unique: true
-  },
-  name: {
-    type: String,
-    default: null
-  },
-  email: {
-    type: String,
-    default: null
-  },
-  phone: {
-    type: String,
-    default: null
-  },
-  referral_id: {
-    type: String,
-    // required: true
-  },
-  verified: {
-    type: Boolean,
-    default: false
-  },
-  status: {
-    type: String,
-    enum: ["Active", "Inactive"],
-    default: "Inactive"
-  },
-}, { timestamps: true });
+  { timestamps: true }
+);
 
 module.exports = mongoose.model("User", userSchema);
