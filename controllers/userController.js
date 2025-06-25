@@ -199,87 +199,97 @@ exports.getDashboard = async (req, res) => {
     // Get all packages (both active and inactive)
     const allPackages = await Packages.find({});
 
-    // Get user's active packages
+    // Get user's packages
     const userPackages = await Packages.find({ userId: user.userId });
 
     // Calculate total investment from user's packages
     const totalInvestment = userPackages.reduce(
-      (sum, pkg) => sum + (pkg.investedAmount || 0),
+      (sum, pkg) => sum + (pkg.packageAmount || 0),
       0
     );
 
-    // Get transaction summary
-    const txAggregate = await Transaction.aggregate([
-      { $match: { userId: user.userId } },
+    // Get referral counts
+    const directTeam = await User.find({ parentId: user.userId });
+    const totalDirectTeam = directTeam.length;
+    
+    // Count active direct referrals (users with at least one active package)
+    const activeDirectTeam = await User.aggregate([
+      { 
+        $match: { 
+          parentId: user.userId 
+        } 
+      },
+      {
+        $lookup: {
+          from: "packages",
+          localField: "userId",
+          foreignField: "userId",
+          as: "packages"
+        }
+      },
+      {
+        $match: {
+          "packages.status": true // Only count if package status is true (active)
+        }
+      },
+      {
+        $count: "activeCount"
+      }
+    ]);
+
+    const totalActiveDirect = activeDirectTeam[0]?.activeCount || 0;
+
+    // Calculate bonus information only
+    const bonusInfo = await Transaction.aggregate([
+      {
+        $match: {
+          userId: user.userId,
+          transactionRemark: { $regex: /bonus/i } // Case-insensitive bonus match
+        }
+      },
       {
         $group: {
           _id: null,
-          totalDeposits: {
-            $sum: {
-              $cond: [
-                { $eq: ["$transactionType", "deposit"] },
-                "$creditedAmount",
-                0,
-              ],
-            },
-          },
-          totalWithdrawals: {
-            $sum: {
-              $cond: [
-                { $eq: ["$transactionType", "withdrawal"] },
-                "$debitedAmount",
-                0,
-              ],
-            },
-          },
-          totalEarnings: {
-            $sum: {
-              $cond: [
-                { $eq: ["$transactionType", "earning"] },
-                "$creditedAmount",
-                0,
-              ],
-            },
-          },
-        },
-      },
+          totalBonusEarned: { $sum: "$creditedAmount" },
+          count: { $sum: 1 }
+        }
+      }
     ]);
 
-    const transactionSummary = txAggregate[0] || {
-      totalDeposits: 0,
-      totalWithdrawals: 0,
-      totalEarnings: 0,
-    };
-
-    // Get referral count
-    const referralCount = await User.countDocuments({
-      referrer: user.userId,
-    });
+    // Get recent bonus transactions
+    const recentBonuses = await Transaction.find({
+      userId: user.userId,
+      transactionRemark: { $regex: /bonus/i }
+    })
+    .sort({ createdAt: -1 })
+    .limit(5)
+    .select('creditedAmount transactionRemark walletName createdAt status -_id');
 
     // Prepare response
     const dashboardData = {
       userInfo: {
         userId: user.userId,
-        name: user.name,
-        email: user.email,
-        walletAddress: user.walletAddress,
-        parentId: user.parentId,
-        status: user.status,
-        joinDate: user.createdAt,
+        name: user.name
       },
       walletInfo: {
-        CGTBalance: wallet.CGTBalance
+        CGTBalance: wallet.CGTBalance,
+        autopoolBalance: wallet.autopoolBalance,
+        utilityBalance: wallet.utilityBalance,
       },
       investmentInfo: {
         totalInvestment,
-        activePackages: userPackages.length,
+        activePackages: userPackages.filter(pkg => pkg.status).length,
+        totalPackages: userPackages.length,
         packages: userPackages,
       },
-      transactionSummary,
       referralInfo: {
-        referralCount,
+        totalDirectTeam,
+        totalActiveDirect,
       },
-      allPackages: allPackages, // All available packages in the system
+      bonusInfo: {
+        totalBonusEarned: bonusInfo[0]?.totalBonusEarned || 0
+      },
+      // allPackages: allPackages,
     };
 
     res.status(200).json({
