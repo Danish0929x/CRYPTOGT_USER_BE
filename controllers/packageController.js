@@ -4,7 +4,7 @@ const { distributeDirectBonus } = require("../functions/directDistributeBonus");
 exports.createPackage = async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { packageAmount } = req.body;
+    const { packageAmount, txnId } = req.body;
 
     if (!userId || !packageAmount) {
       return res.status(400).json({ 
@@ -16,11 +16,14 @@ exports.createPackage = async (req, res) => {
     // Determine package type and ROI based on amount
     const packageType = packageAmount <= 1000 ? "Leader" : "Investor";
 
+
     // Create new package according to model
     const newPackage = new Package({
       userId,
       packageType,
       packageAmount,
+      txnId,
+      roi: 0,
       poi: 0, 
       startDate: new Date(),
       status: true // Using boolean true instead of string
@@ -39,6 +42,7 @@ exports.createPackage = async (req, res) => {
         packageType: newPackage.packageType,
         packageAmount: newPackage.packageAmount,
         roi: newPackage.roi,
+        txnId: newPackage.txnId,
         startDate: newPackage.startDate
       }
     });

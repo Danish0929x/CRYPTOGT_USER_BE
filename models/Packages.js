@@ -16,6 +16,9 @@ const packageSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  txnId: {
+    type: String
+  },
   poi: {
     type: Number,
     required: true
