@@ -41,23 +41,28 @@ async function getReferralDetails(req, res) {
 }
 
 // Get user's referral network
+// Get user's referral network
 async function getReferralNetwork(req, res) {
-  const { userId } = req.user; // Assuming authenticated user
-  const { depth = 3 } = req.query; // Default depth 3 levels
+  const userId = req.user.userId; // Assuming authenticated user
+  const { depthLimit } = req.body; // Required depth from request body
 
   try {
-    const referrals = await getNetworkTree(userId, parseInt(depth));
+    const user = await User.findOne({ userId: userId });
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const referrals = await getNetworkTree(userId, depthLimit);
 
     const formattedReferrals = referrals.map((ref, index) => ({
-      sn: index + 1,
-      userId: ref.userId,
+      userId: ref.userId || "none",
       name: ref.name || "Anonymous",
-      walletAddress: ref.walletAddress,
+      walletAddress: ref.walletAddress || "none",
       level: ref.level,
       package: ref.package || "None",
       investment: ref.investment || 0,
-      joinDate: ref.createdAt,
-      status: ref.status
+      joinDate: ref.createdAt || "none"
     }));
 
     res.status(200).json({
@@ -71,8 +76,8 @@ async function getReferralNetwork(req, res) {
     console.error("Error fetching referral network:", error);
     res.status(500).json({
       success: false,
-      message: "Server error",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: "Error fetching referral network",
+      error: error.message
     });
   }
 }
