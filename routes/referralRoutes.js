@@ -7,7 +7,7 @@ const authMiddleware = require('../middlewares/authMiddleware'); // Assuming you
 router.get('/getreferraldetails/:id', referralController.getReferralDetails);
 
 // GET user's referral network (requires authentication)
-router.get('/getreferralnetwork', authMiddleware, referralController.getReferralNetwork);
+router.post('/getreferralnetwork', authMiddleware, referralController.getReferralNetwork);
 
 // GET referral statistics (requires authentication)
 router.get('/getreferralstats', authMiddleware, referralController.getReferralStats);
