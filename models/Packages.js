@@ -16,6 +16,10 @@ const packageSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  cgtCoin: {
+    type: Number, // CGT Coin
+    required: true
+  },
   txnId: {
     type: String
   },

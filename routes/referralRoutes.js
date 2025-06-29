@@ -12,4 +12,7 @@ router.post('/getreferralnetwork', authMiddleware, referralController.getReferra
 // GET referral statistics (requires authentication)
 router.get('/getreferralstats', authMiddleware, referralController.getReferralStats);
 
+// GET getRank And Reward (requires authentication)
+router.get('/get-rank-reward', authMiddleware, referralController.getRankAndReward);
+
 module.exports = router;

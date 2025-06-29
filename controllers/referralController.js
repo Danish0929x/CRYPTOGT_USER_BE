@@ -141,6 +141,7 @@ async function getNetworkTree(rootUserId, depth) {
     throw error;
   }
 }
+
 // Get referral statistics
 async function getReferralStats(req, res) {
   const { userId } = req.user;
@@ -173,8 +174,133 @@ async function getReferralStats(req, res) {
   }
 }
 
+
+
+async function getRankAndReward(req, res) {
+  try {
+    const userId = req.user.userId;
+
+    // 1. Total Direct Active Members (direct referrals with active packages)
+    const directActiveMembers = await User.aggregate([
+      { $match: { parentId: userId } },
+      {
+        $lookup: {
+          from: "packages",
+          localField: "userId",
+          foreignField: "userId",
+          as: "packages"
+        }
+      },
+      {
+        $match: {
+          "packages.status": true
+        }
+      },
+      { $count: "count" }
+    ]);
+
+    // 2. Self Investment (sum of ALL user's packages - both active and inactive)
+    const selfInvestment = await Package.aggregate([
+      { $match: { userId } }, // Removed status filter
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$packageAmount" }
+        }
+      }
+    ]);
+
+    // 3. Total Direct Business Amount (sum of direct referrals' active packages)
+    const directBusiness = await Package.aggregate([
+      {
+        $lookup: {
+          from: "users",
+          localField: "userId",
+          foreignField: "userId",
+          as: "user"
+        }
+      },
+      { $unwind: "$user" },
+      { $match: { "user.parentId": userId, status: true } },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$packageAmount" }
+        }
+      }
+    ]);
+
+    // 4. Total Team Size (all referrals at any level)
+    const teamSize = await getNetworkTree(userId, 100).then(res => res.length);
+
+    // 5. Total Team Business Amount (all referrals' active packages)
+    const teamBusiness = await Package.aggregate([
+      {
+        $lookup: {
+          from: "users",
+          localField: "userId",
+          foreignField: "userId",
+          as: "user"
+        }
+      },
+      { $unwind: "$user" },
+      { 
+        $match: { 
+          "user.parentId": { $ne: null }, // Exclude root user
+          status: true 
+        } 
+      },
+      {
+        $graphLookup: {
+          from: "users",
+          startWith: "$user.parentId",
+          connectFromField: "parentId",
+          connectToField: "userId",
+          as: "network",
+          maxDepth: 100
+        }
+      },
+      {
+        $match: {
+          "network.userId": userId
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$packageAmount" }
+        }
+      }
+    ]);
+
+    res.status(200).json({
+      success: true,
+      message: "Rank and reward data fetched successfully",
+      data: {
+        totalDirectActiveMembers: directActiveMembers[0]?.count || 0,
+        selfInvestment: selfInvestment[0]?.total || 0,
+        totalDirectBusinessAmount: directBusiness[0]?.total || 0,
+        totalTeamSize: teamSize,
+        totalTeamBusinessAmount: teamBusiness[0]?.total || 0
+      }
+    });
+
+  } catch (error) {
+    console.error("Error in getRankAndReward:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error fetching rank and reward data",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined
+    });
+  }
+}
+
+
+
+
 module.exports = {
   getReferralDetails,
   getReferralNetwork,
-  getReferralStats
+  getReferralStats,
+  getRankAndReward
 };
