@@ -27,10 +27,6 @@ const packageSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
-  booster: {
-    type: Boolean,
-    default: false
-  },
   productVoucher: {
     type: Boolean,
     default: false

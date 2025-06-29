@@ -3,6 +3,7 @@ const User = require("../models/User");
 const Wallet = require("../models/Wallet");
 const Packages = require("../models/Packages");
 const Transaction = require("../models/Transaction");
+const Assets = require("../models/Assets");
 
 // ROUTE: 1 Get logged in user details using wallet address
 exports.getUser = async (req, res) => {
@@ -304,6 +305,45 @@ exports.getDashboard = async (req, res) => {
       success: false,
       message: "Failed to get dashboard data",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+exports.getAsset = async (req, res) => {
+  try {
+    // Find the single assets document
+    const asset = await Assets.findOne({}).lean();
+    
+    // If no document exists, return defaults
+    if (!asset) {
+      return res.status(200).json({
+        success: true,
+        asset: {
+          liveRate: "",
+          announcement: "",
+          popUpImage: ""
+        }
+      });
+    }
+
+    // Prepare response with full image URL
+    const response = {
+      success: true,
+      asset: {
+        liveRate: asset.liveRate,
+        announcement: asset.announcement || "",
+        popUpImage: asset.popUpImage || ""
+      }
+    };
+
+    res.status(200).json(response);
+
+  } catch (error) {
+    console.error("Error in getAsset:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch asset data",
+      error: error.message
     });
   }
 };

@@ -1,10 +1,13 @@
 const Package = require('../models/Packages'); 
 const { distributeDirectBonus } = require("../functions/directDistributeBonus");
+const getLiveRate = require('../utils/liveRateUtils');
+
 
 exports.createPackage = async (req, res) => {
   try {
     const userId = req.user.userId;
     const { packageAmount, txnId } = req.body;
+    const liveRate = await getLiveRate();
 
     if (!userId || !packageAmount) {
       return res.status(400).json({ 
@@ -21,9 +24,9 @@ exports.createPackage = async (req, res) => {
     const newPackage = new Package({
       userId,
       packageType,
+      cgtCoin: parseFloat((packageAmount / liveRate).toFixed(5)),
       packageAmount,
       txnId,
-      roi: 0,
       poi: 0, 
       startDate: new Date(),
       status: true // Using boolean true instead of string
@@ -32,19 +35,12 @@ exports.createPackage = async (req, res) => {
     await newPackage.save();
 
     // Distribute direct bonus to parent
-    await distributeDirectBonus(packageAmount, userId);
+    await distributeDirectBonus(newPackage.cgtCoin , userId);
 
     res.status(201).json({
       success: true,
       message: "Package created successfully",
-      data: {
-        packageId: newPackage._id,
-        packageType: newPackage.packageType,
-        packageAmount: newPackage.packageAmount,
-        roi: newPackage.roi,
-        txnId: newPackage.txnId,
-        startDate: newPackage.startDate
-      }
+      data: newPackage
     });
 
   } catch (err) {
