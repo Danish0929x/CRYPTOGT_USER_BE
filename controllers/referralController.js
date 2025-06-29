@@ -93,48 +93,42 @@ async function getNetworkTree(rootUserId, depth) {
         connectFromField: "userId",
         connectToField: "parentId",
         maxDepth: depth - 1,
-        depthField: "networkLevel",  // Changed from "level" to avoid confusion
+        depthField: "networkLevel",
         as: "network"
       }
     },
     { $unwind: "$network" },
-    // Include all levels but adjust numbering
     {
       $addFields: {
-        "level": { $add: ["$network.networkLevel", 1] }  // Convert to 1-based indexing
+        "level": { $add: ["$network.networkLevel", 1] }
       }
     },
     {
       $lookup: {
         from: "packages",
-        localField: "network.userId",
-        foreignField: "userId",
-        as: "packages"
-      }
-    },
-    {
-      $addFields: {
-        activePackage: {
-          $filter: {
-            input: "$packages",
-            as: "pkg",
-            cond: { $eq: ["$$pkg.status", "Active"] }
-          }
-        }
+        let: { userId: "$network.userId" },
+        pipeline: [
+          {
+            $match: {
+              $expr: { $eq: ["$userId", "$$userId"] },
+              status: true // Changed to boolean true
+            }
+          },
+          { $sort: { createdAt: -1 } }, // Get most recent package
+          { $limit: 1 }
+        ],
+        as: "activePackage"
       }
     },
     {
       $project: {
         userId: "$network.userId",
         name: "$network.name",
-        walletAddress: "$network.walletAddress",
-        parentId: "$network.parentId",
-        status: "$network.status",
-        level: 1,  // Our adjusted level (1-based)
-        originalLevel: "$network.networkLevel",  // Keep original for reference
+        level: 1,
         createdAt: "$network.createdAt",
-        package: { $ifNull: [{ $arrayElemAt: ["$activePackage.name", 0] }, "None"] },
-        investment: { $ifNull: [{ $arrayElemAt: ["$activePackage.packageAmount", 0] }, 0] }
+        investment: {
+          $ifNull: [{ $arrayElemAt: ["$activePackage.packageAmount", 0] }, 0]
+        }
       }
     },
     { $sort: { level: 1, createdAt: 1 } }
