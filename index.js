@@ -33,6 +33,8 @@ app.use('/api/package', require('./routes/packageRoutes'));
 
 app.use('/api/referral', require('./routes/referralRoutes'));
 
+app.use('/api/transaction', require('./routes/transactionRoutes'));
+
 
 // Simple health check
 app.get('/', (req, res) => {
