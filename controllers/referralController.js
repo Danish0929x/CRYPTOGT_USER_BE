@@ -58,9 +58,7 @@ async function getReferralNetwork(req, res) {
     const formattedReferrals = referrals.map((ref, index) => ({
       userId: ref.userId || "none",
       name: ref.name || "Anonymous",
-      walletAddress: ref.walletAddress || "none",
       level: ref.level,
-      package: ref.package || "None",
       investment: ref.investment || 0,
       joinDate: ref.createdAt || "none"
     }));
@@ -95,11 +93,17 @@ async function getNetworkTree(rootUserId, depth) {
         connectFromField: "userId",
         connectToField: "parentId",
         maxDepth: depth - 1,
-        depthField: "level",
+        depthField: "networkLevel",  // Changed from "level" to avoid confusion
         as: "network"
       }
     },
     { $unwind: "$network" },
+    // Include all levels but adjust numbering
+    {
+      $addFields: {
+        "level": { $add: ["$network.networkLevel", 1] }  // Convert to 1-based indexing
+      }
+    },
     {
       $lookup: {
         from: "packages",
@@ -126,9 +130,10 @@ async function getNetworkTree(rootUserId, depth) {
         walletAddress: "$network.walletAddress",
         parentId: "$network.parentId",
         status: "$network.status",
-        level: "$network.level",
+        level: 1,  // Our adjusted level (1-based)
+        originalLevel: "$network.networkLevel",  // Keep original for reference
         createdAt: "$network.createdAt",
-        package: { $ifNull: [{ $arrayElemAt: ["$activePackage.name", 0] }, null] },
+        package: { $ifNull: [{ $arrayElemAt: ["$activePackage.name", 0] }, "None"] },
         investment: { $ifNull: [{ $arrayElemAt: ["$activePackage.packageAmount", 0] }, 0] }
       }
     },
@@ -142,7 +147,6 @@ async function getNetworkTree(rootUserId, depth) {
     throw error;
   }
 }
-
 // Get referral statistics
 async function getReferralStats(req, res) {
   const { userId } = req.user;
