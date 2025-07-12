@@ -35,6 +35,8 @@ app.use('/api/referral', require('./routes/referralRoutes'));
 
 app.use('/api/transaction', require('./routes/transactionRoutes'));
 
+app.use('/api/withdraw', require('./routes/withdrawRoutes'));
+
 
 // Simple health check
 app.get('/', (req, res) => {
