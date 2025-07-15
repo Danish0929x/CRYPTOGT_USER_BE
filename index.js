@@ -15,7 +15,7 @@ const app = express();
 app.use(cors({
   origin: [
     process.env.CLIENT_URL || 'http://localhost:3000',
-    'http://localhost:8081' // ← New domain added here
+    'http://localhost:8081', 'https://moccasin-bison-480201.hostingersite.com' // ← New domain added here
   ],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
