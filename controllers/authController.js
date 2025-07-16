@@ -40,9 +40,16 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Generate user ID
-    const userId = `CGT${Math.floor(1000000 + Math.random() * 900000)}`;
-
+     // Generate unique user ID (check exists before use)
+    let userId;
+    let isUnique = false;
+    while (!isUnique) {
+      userId = `CGT${(Math.floor(Math.random() * 9999) + 1).toString().padStart(4, '0')}`;
+      const existingUserId = await User.findOne({ userId });
+      if (!existingUserId) {
+        isUnique = true;
+      }
+    }
     // Create user with required fields from model
     const user = await User.create({
       walletAddress,
