@@ -36,10 +36,10 @@ const packageSchema = new mongoose.Schema({
     required: true,
     default: Date.now,
   },
-  status: {
+   status: {
     type: String,
-    default: Requested,
-    enum:[Active, InActive, Requested]
+    enum: ['Active', 'Inactive', 'Requested'],
+    default: "Requested"
   }
   
 }, { timestamps: true });
