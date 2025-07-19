@@ -37,8 +37,9 @@ const packageSchema = new mongoose.Schema({
     default: Date.now,
   },
   status: {
-    type: Boolean,
-    default: true
+    type: String,
+    default: Requested,
+    enum:[Active, InActive, Requested]
   }
   
 }, { timestamps: true });
