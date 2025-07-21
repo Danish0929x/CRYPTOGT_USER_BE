@@ -152,9 +152,7 @@ async function getReferralStats(req, res) {
       getNetworkTree(userId, 10).then(res => res.length),
       Package.countDocuments({ 
         userId, 
-        $or: [
-          { status: "Active" }
-        ]
+        status: "Active"
       })
     ]);
 
