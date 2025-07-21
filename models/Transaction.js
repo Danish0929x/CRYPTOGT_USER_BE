@@ -30,6 +30,10 @@ const transactionSchema = new mongoose.Schema({
     enum: ['USDTBalance', 'autopoolBalance', 'utilityBalance'],
     required: true
   },
+  tokenRate: {
+    type: Number,
+    default: 0
+  },
   status: {
     type: String,
     required: true
