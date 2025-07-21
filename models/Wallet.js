@@ -5,7 +5,7 @@ const walletSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
-  CGTBalance: {
+  USDTBalance: {
     type: Number,
     required: true,
     default: 0,
@@ -29,7 +29,7 @@ walletSchema.pre('save', function (next) {
     return num;
   };
 
-  this.CGTBalance = round(this.CGTBalance);
+  this.USDTBalance = round(this.USDTBalance);
   this.autopoolBalance = round(this.autopoolBalance);
   this.utilityBalance = round(this.utilityBalance);
 

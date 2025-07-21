@@ -66,7 +66,7 @@ exports.register = async (req, res) => {
     // Create wallet with all required fields
     await Wallet.create({
       userId,
-      CGTBalance: 0,
+      USDTBalance: 0,
       autopoolBalance: 0,
       utilityBalance: 0
     });

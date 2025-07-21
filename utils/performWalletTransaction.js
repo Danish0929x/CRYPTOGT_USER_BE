@@ -2,12 +2,12 @@ const Transaction = require("../models/Transaction");
 const Wallet = require("../models/Wallet");
 
 /**
- * Perform a credit or debit against the user's wallet balance (CGTBalance, autopoolBalance, or utilityBalance),
+ * Perform a credit or debit against the user's wallet balance (USDTBalance, autopoolBalance, or utilityBalance),
  * then log it as a Transaction.
  *
  * @param {String} userId
  * @param {Number|String} amount      Positive to credit, negative to debit
- * @param {String} walletName         Either 'CGTBalance', 'autopoolBalance' or 'utilityBalance'
+ * @param {String} walletName         Either 'USDTBalance', 'autopoolBalance' or 'utilityBalance'
  * @param {String} transactionRemark
  * @param {String} status             e.g. "Pending" or "Completed"
  * @returns {Promise<Transaction>}
@@ -30,8 +30,8 @@ async function performWalletTransaction(
   if (isNaN(amt)) throw new Error("Invalid amount");
 
   // Validate wallet name against current model
-  if (!["CGTBalance", "autopoolBalance", "utilityBalance"].includes(walletName)) {
-    throw new Error("Invalid wallet name. Must be 'CGTBalance', 'autopoolBalance' or 'utilityBalance'");
+  if (!["USDTBalance", "autopoolBalance", "utilityBalance"].includes(walletName)) {
+    throw new Error("Invalid wallet name. Must be 'USDTBalance', 'autopoolBalance' or 'utilityBalance'");
   }
 
   const userWallet = await Wallet.findOne({ userId });
@@ -87,7 +87,7 @@ async function updateTransactionStatus(transactionId, newStatus) {
     const userWallet = await Wallet.findOne({ userId: tx.userId });
     if (!userWallet) throw new Error("User's wallet not found");
 
-    if (!["CGTBalance", "autopoolBalance", "utilityBalance"].includes(tx.walletName)) {
+    if (!["USDTBalance", "autopoolBalance", "utilityBalance"].includes(tx.walletName)) {
       throw new Error("Invalid walletName in transaction");
     }
 

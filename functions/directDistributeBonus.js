@@ -33,7 +33,7 @@ async function distributeDirectBonus(packageAmount, userId) {
     await performWalletTransaction(
       user.parentId, // Parent's userId
       bonusAmount,
-      "CGTBalance", 
+      "USDTBalance", 
       transactionRemark,
       "Completed"
     );

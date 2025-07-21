@@ -31,8 +31,8 @@ const withdrawCGT = async (req, res) => {
       return res.status(404).json({ error: 'Wallet not found' });
     }
 
-    if (wallet.CGTBalance < cgtToWithdraw) {
-      return res.status(400).json({ error: 'Insufficient CGT balance' });
+    if (wallet.USDTBalance < cgtToWithdraw) {
+      return res.status(400).json({ error: 'Insufficient USDT balance' });
     }
 
     // 3. Check if user already withdrew today
@@ -40,8 +40,8 @@ const withdrawCGT = async (req, res) => {
     const withdrawnToday = await Transaction.findOne({
       userId,
       debitedAmount: { $gt: 0 },
-      transactionRemark: 'CGT Withdraw - Dollar Equivalent Withdrawal',
-      walletName: 'CGTBalance',
+      transactionRemark: 'Withdraw CGT - Dollar Equivalent Withdrawal',
+      walletName: 'USDTBalance',
       $expr: {
         $and: [
           { $eq: [{ $year: "$createdAt" }, now.getFullYear()] },
@@ -59,8 +59,8 @@ const withdrawCGT = async (req, res) => {
     await performWalletTransaction(
       userId,
       -cgtToWithdraw,
-      'CGTBalance',
-      'CGT Withdraw - Dollar Equivalent Withdrawal',
+      'USDTBalance',
+      'Withdraw CGT - Dollar Equivalent Withdrawal',
       'Pending'
     );
 

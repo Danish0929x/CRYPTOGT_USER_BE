@@ -27,7 +27,7 @@ const transactionSchema = new mongoose.Schema({
   },
   walletName: {
     type: String,
-    enum: ['CGTBalance', 'autopoolBalance', 'utilityBalance'],
+    enum: ['USDTBalance', 'autopoolBalance', 'utilityBalance'],
     required: true
   },
   status: {

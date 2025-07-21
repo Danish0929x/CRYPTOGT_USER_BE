@@ -35,7 +35,7 @@ exports.createPackage = async (req, res) => {
     await newPackage.save();
 
     // Distribute direct bonus to parent
-    await distributeDirectBonus(newPackage.cgtCoin , userId);
+    await distributeDirectBonus(newPackage.packageAmount , userId);
 
     res.status(201).json({
       success: true,

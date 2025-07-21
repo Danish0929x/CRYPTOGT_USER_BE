@@ -143,7 +143,7 @@ exports.getWallet = async (req, res) => {
     const walletData = {
       walletAddress: user.walletAddress,
       userId: user.userId,
-      CGTBalance: wallet.CGTBalance,
+      USDTBalance: wallet.USDTBalance,
       autopoolBalance: wallet.autopoolBalance,
       utilityBalance: wallet.utilityBalance,
       createdAt:      wallet.createdAt,
@@ -273,7 +273,7 @@ exports.getDashboard = async (req, res) => {
         name: user.name
       },
       walletInfo: {
-        CGTBalance: wallet.CGTBalance,
+        USDTBalance: wallet.USDTBalance,
         autopoolBalance: wallet.autopoolBalance,
         utilityBalance: wallet.utilityBalance,
       },
