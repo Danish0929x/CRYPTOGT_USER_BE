@@ -111,7 +111,7 @@ async function getNetworkTree(rootUserId, depth) {
           {
             $match: {
               $expr: { $eq: ["$userId", "$$userId"] },
-              status: true // Changed to boolean true
+              status: "Active" // Changed to boolean true
             }
           },
           { $sort: { createdAt: -1 } }, // Get most recent package
@@ -150,7 +150,12 @@ async function getReferralStats(req, res) {
     const [directReferrals, totalNetwork, activeInvestors] = await Promise.all([
       User.countDocuments({ parentId: userId }),
       getNetworkTree(userId, 10).then(res => res.length),
-      Package.countDocuments({ userId, status: "true" })
+      Package.countDocuments({ 
+        userId, 
+        $or: [
+          { status: "Active" }
+        ]
+      })
     ]);
 
     res.status(200).json({
@@ -193,7 +198,12 @@ async function getRankAndReward(req, res) {
       },
       {
         $match: {
-          "packages.status": true
+          $or: [
+            { "packages.status": "Active" },
+            { "packages.status": "active" },
+            { "packages.status": "true" },
+            { "packages.status": true }
+          ]
         }
       },
       { $count: "count" }
@@ -221,7 +231,15 @@ async function getRankAndReward(req, res) {
         }
       },
       { $unwind: "$user" },
-      { $match: { "user.parentId": userId, status: true } },
+      { $match: { 
+        "user.parentId": userId, 
+        $or: [
+          { status: "Active" },
+          { status: "active" },
+          { status: "true" },
+          { status: true }
+        ]
+      } },
       {
         $group: {
           _id: null,
@@ -247,7 +265,12 @@ async function getRankAndReward(req, res) {
       { 
         $match: { 
           "user.parentId": { $ne: null }, // Exclude root user
-          status: true 
+          $or: [
+            { status: "Active" },
+            { status: "active" },
+            { status: "true" },
+            { status: true }
+          ]
         } 
       },
       {
