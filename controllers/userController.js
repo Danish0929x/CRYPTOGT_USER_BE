@@ -230,7 +230,7 @@ exports.getDashboard = async (req, res) => {
       },
       {
         $match: {
-          "packages.status": true // Only count if package status is true (active)
+          "packages.status": "Active" // Only count if package status is true (active)
         }
       },
       {
