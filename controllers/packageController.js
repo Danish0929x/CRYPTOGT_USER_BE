@@ -29,7 +29,7 @@ exports.createPackage = async (req, res) => {
       txnId,
       poi: 0, 
       startDate: new Date(),
-      status: true // Using boolean true instead of string
+      status: "Requested" // Using boolean true instead of string
     });
 
     await newPackage.save();
