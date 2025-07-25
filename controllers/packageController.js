@@ -68,9 +68,12 @@ exports.getPackagesByUserId = async (req, res) => {
       .sort({ startDate: -1 })
       .select('packageType packageAmount roi startDate status createdAt');
 
+    const totalAmount = packages.reduce((sum, pkg) => sum + pkg.packageAmount, 0);
+
     res.status(200).json({
       success: true,
       message: "Packages retrieved successfully",
+      totalInvestment: totalAmount,
       data: packages.map(pkg => ({
         id: pkg._id,
         type: pkg.packageType,
