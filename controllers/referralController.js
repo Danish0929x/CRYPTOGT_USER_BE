@@ -55,7 +55,7 @@ async function getReferralNetwork(req, res) {
 
     const referrals = await getNetworkTree(userId, depthLimit);
 
-    const formattedReferrals = referrals.map((ref, index) => ({
+    const formattedReferrals = referrals.map((ref) => ({
       userId: ref.userId || "none",
       name: ref.name || "Anonymous",
       level: ref.level,
@@ -80,6 +80,7 @@ async function getReferralNetwork(req, res) {
   }
 }
 
+
 // Helper function to build referral network tree
 async function getNetworkTree(rootUserId, depth) {
   const pipeline = [
@@ -100,7 +101,7 @@ async function getNetworkTree(rootUserId, depth) {
     { $unwind: "$network" },
     {
       $addFields: {
-        "level": { $add: ["$network.networkLevel", 1] }
+        level: { $add: ["$network.networkLevel", 1] }
       }
     },
     {
@@ -111,13 +112,17 @@ async function getNetworkTree(rootUserId, depth) {
           {
             $match: {
               $expr: { $eq: ["$userId", "$$userId"] },
-              status: "Active" // Changed to boolean true
+              status: "Active"
             }
           },
-          { $sort: { createdAt: -1 } }, // Get most recent package
-          { $limit: 1 }
+          {
+            $group: {
+              _id: "$userId",
+              totalInvestment: { $sum: "$packageAmount" }
+            }
+          }
         ],
-        as: "activePackage"
+        as: "investmentData"
       }
     },
     {
@@ -127,7 +132,7 @@ async function getNetworkTree(rootUserId, depth) {
         level: 1,
         createdAt: "$network.createdAt",
         investment: {
-          $ifNull: [{ $arrayElemAt: ["$activePackage.packageAmount", 0] }, 0]
+          $ifNull: [{ $arrayElemAt: ["$investmentData.totalInvestment", 0] }, 0]
         }
       }
     },
@@ -141,6 +146,7 @@ async function getNetworkTree(rootUserId, depth) {
     throw error;
   }
 }
+
 
 // Get referral statistics
 async function getReferralStats(req, res) {
