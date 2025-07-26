@@ -21,7 +21,7 @@ async function distributeDirectBonus(packageAmount, userId) {
     // Check if parent has at least one active package
     const parentHasActivePackage = await Package.exists({
       userId: user.parentId,
-      status: true 
+      status: "Active" 
     });
 
     if (!parentHasActivePackage) {
@@ -39,7 +39,7 @@ async function distributeDirectBonus(packageAmount, userId) {
     );
 
     console.log(
-      `Added ${bonusAmount} CGT to parent ${user.parentId}'s wallet`
+      `Added ${bonusAmount} USDT to parent ${user.parentId}'s wallet`
     );
   } catch (error) {
     console.error("Error during direct bonus distribution:", error);
