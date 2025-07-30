@@ -11,37 +11,64 @@ const withdrawCGT = async (req, res) => {
     const userId = req.user.userId;
     const { amount } = req.body; // amount in USD
 
-    // 1. Validate amount
+    // 1. Validate amount (minimum 10 USDT)
     if (!amount || isNaN(amount) || Number(amount) < 10) {
-      return res.status(400).json({ error: 'Minimum withdrawal amount is $10' });
+      return res.status(400).json({ 
+        success: false,
+        message: 'Minimum withdrawal amount is $10' 
+      });
     }
 
     const usdAmount = Number(amount);
     const liveRate = await getLiveRate();
 
     if (!liveRate || liveRate <= 0) {
-      return res.status(500).json({ error: 'Live rate not available. Please try again later.' });
+      return res.status(500).json({ 
+        success: false,
+        message: 'Live rate not available. Please try again later.' 
+      });
     }
 
     const cgtToWithdraw = parseFloat((usdAmount / liveRate).toFixed(5)); // CGT value
 
-    // 2. Find wallet
+    // 2. Check for existing pending withdrawal
+    const pendingWithdrawal = await Transaction.findOne({
+      userId,
+      status: 'Pending',
+      transactionRemark: 'Withdraw CGT - Dollar Equivalent Withdrawal'
+    });
+
+    if (pendingWithdrawal) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'You already have a pending withdrawal request' 
+      });
+    }
+
+    // 3. Find wallet and check balance
     const wallet = await Wallet.findOne({ userId });
     if (!wallet) {
-      return res.status(404).json({ error: 'Wallet not found' });
+      return res.status(404).json({ 
+        success: false,
+        message: 'Wallet not found' 
+      });
     }
 
     if (wallet.USDTBalance < cgtToWithdraw) {
-      return res.status(400).json({ error: 'Insufficient USDT balance' });
+      return res.status(400).json({ 
+        success: false,
+        message: 'Insufficient USDT balance' 
+      });
     }
 
-    // 3. Check if user already withdrew today
+    // 4. Check if user already withdrew today (completed withdrawals)
     const now = new Date();
     const withdrawnToday = await Transaction.findOne({
       userId,
       debitedAmount: { $gt: 0 },
       transactionRemark: 'Withdraw CGT - Dollar Equivalent Withdrawal',
       walletName: 'USDTBalance',
+      status: 'Completed',
       $expr: {
         $and: [
           { $eq: [{ $year: "$createdAt" }, now.getFullYear()] },
@@ -52,10 +79,13 @@ const withdrawCGT = async (req, res) => {
     });
 
     if (withdrawnToday) {
-      return res.status(400).json({ error: 'You can only withdraw once per day' });
+      return res.status(400).json({ 
+        success: false,
+        message: 'You can only withdraw once per day' 
+      });
     }
 
-    // 4. Perform transaction
+    // 5. Perform transaction
     await performWalletTransaction(
       userId,
       -cgtToWithdraw,
@@ -65,14 +95,22 @@ const withdrawCGT = async (req, res) => {
     );
 
     res.status(200).json({
+      success: true,
       message: 'Withdrawal request submitted successfully',
-      CGTAmount: cgtToWithdraw,
-      USDRequested: usdAmount,
-      liveRate
+      data: {
+        CGTAmount: cgtToWithdraw,
+        USDRequested: usdAmount,
+        liveRate,
+        status: 'Pending'
+      }
     });
   } catch (error) {
     console.error('Withdraw CGT error:', error);
-    res.status(500).json({ error: 'Internal Server Error' });
+    res.status(500).json({ 
+      success: false,
+      message: 'Internal Server Error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 
