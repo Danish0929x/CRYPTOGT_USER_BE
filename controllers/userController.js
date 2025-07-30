@@ -245,7 +245,7 @@ exports.getDashboard = async (req, res) => {
       {
         $match: {
           userId: user.userId,
-          transactionRemark: { $regex: /bonus/i } // Case-insensitive bonus match
+          transactionRemark: { $regex: /Bonus/i } // Case-insensitive bonus match
         }
       },
       {

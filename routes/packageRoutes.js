@@ -4,6 +4,7 @@ const packageController = require('../controllers/packageController');
 const authMiddleware = require('../middlewares/authMiddleware');
 
 router.post('/create-package', authMiddleware, packageController.createPackage);
+router.post('/re-topup', authMiddleware, packageController.reTopUp);
 router.get('/getPackagesByUserId', authMiddleware, packageController.getPackagesByUserId);
 
 module.exports = router;

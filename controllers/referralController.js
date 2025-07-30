@@ -300,6 +300,23 @@ async function getRankAndReward(req, res) {
       }
     ]);
 
+    // 6. Direct RewardStatus Counts - Count direct referrals by their rewardStatus
+    const directRewardStatusCounts = await User.aggregate([
+      { $match: { parentId: userId } },
+      {
+        $group: {
+          _id: "$rewardStatus",
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Convert array to object for easier access
+    const rewardStatusMap = {};
+    directRewardStatusCounts.forEach(item => {
+      rewardStatusMap[item._id] = item.count;
+    });
+
     res.status(200).json({
       success: true,
       message: "Rank and reward data fetched successfully",
@@ -308,7 +325,24 @@ async function getRankAndReward(req, res) {
         selfInvestment: selfInvestment[0]?.total || 0,
         totalDirectBusinessAmount: directBusiness[0]?.total || 0,
         totalTeamSize: teamSize,
-        totalTeamBusinessAmount: teamBusiness[0]?.total || 0
+        totalTeamBusinessAmount: teamBusiness[0]?.total || 0,
+        
+        // Direct RewardStatus counts for rank progression requirements
+        directSupervisors: rewardStatusMap["Supervisor"] || 0,
+        directGeneralManagers: rewardStatusMap["General Manager"] || 0,
+        directDirectors: rewardStatusMap["Director"] || 0,
+        directPresidents: rewardStatusMap["President"] || 0,
+        directStarPresidents: rewardStatusMap["Star President"] || 0,
+        directCrownStars: rewardStatusMap["Crown Star"] || 0,
+        
+        // Additional counts for other ranks (optional)
+        directUsers: rewardStatusMap["User"] || 0,
+        directAssociates: rewardStatusMap["Associate"] || 0,
+        directTeamLeaders: rewardStatusMap["Team Leader"] || 0,
+        directChairman: rewardStatusMap["Chairman"] || 0,
+        
+        // Complete breakdown for debugging/admin purposes
+        allDirectRewardStatusCounts: rewardStatusMap
       }
     });
 
@@ -321,6 +355,7 @@ async function getRankAndReward(req, res) {
     });
   }
 }
+
 
 
 
