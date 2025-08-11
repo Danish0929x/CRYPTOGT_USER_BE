@@ -60,7 +60,8 @@ async function getReferralNetwork(req, res) {
       name: ref.name || "Anonymous",
       level: ref.level,
       investment: ref.investment || 0,
-      joinDate: ref.createdAt || "none"
+      joinDate: ref.createdAt || "none",
+      rewardStatus: ref.rewardStatus || "none" // Added rewardStatus field
     }));
 
     res.status(200).json({
@@ -112,7 +113,7 @@ async function getNetworkTree(rootUserId, depth) {
           {
             $match: {
               $expr: { $eq: ["$userId", "$$userId"] },
-              status: "Active"
+              status: { $in: ["Active", "active", "true", true] }
             }
           },
           {
@@ -131,6 +132,7 @@ async function getNetworkTree(rootUserId, depth) {
         name: "$network.name",
         level: 1,
         createdAt: "$network.createdAt",
+        rewardStatus: "$network.rewardStatus", // Added rewardStatus field
         investment: {
           $ifNull: [{ $arrayElemAt: ["$investmentData.totalInvestment", 0] }, 0]
         }
@@ -146,7 +148,6 @@ async function getNetworkTree(rootUserId, depth) {
     throw error;
   }
 }
-
 
 // Get referral statistics
 async function getReferralStats(req, res) {
@@ -189,131 +190,163 @@ async function getRankAndReward(req, res) {
   try {
     const userId = req.user.userId;
 
-    // 1. Total Direct Active Members (direct referrals with active packages)
-    const directActiveMembers = await User.aggregate([
-      { $match: { parentId: userId } },
-      {
-        $lookup: {
-          from: "packages",
-          localField: "userId",
-          foreignField: "userId",
-          as: "packages"
+    // Run all aggregations in parallel
+    const [
+      directActiveMembers,
+      selfInvestment,
+      directBusiness,
+      teamBusiness,
+      rewardStatusCounts
+    ] = await Promise.all([
+      // 1. Total Direct Active Members
+      User.aggregate([
+        { $match: { parentId: userId } },
+        {
+          $lookup: {
+            from: "packages",
+            localField: "userId",
+            foreignField: "userId",
+            as: "packages"
+          }
+        },
+        {
+          $match: {
+            "packages.status": { 
+              $in: ["Active", "active", "true", true] 
+            }
+          }
+        },
+        { $count: "count" }
+      ]),
+
+      // 2. Self Investment
+      Package.aggregate([
+        { $match: { userId } },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: "$packageAmount" }
+          }
         }
-      },
-      {
-        $match: {
-          $or: [
-            { "packages.status": "Active" },
-            { "packages.status": "active" },
-            { "packages.status": "true" },
-            { "packages.status": true }
-          ]
+      ]),
+
+      // 3. Total Direct Business Amount
+      Package.aggregate([
+        {
+          $lookup: {
+            from: "users",
+            localField: "userId",
+            foreignField: "userId",
+            as: "user"
+          }
+        },
+        { $unwind: "$user" },
+        { 
+          $match: { 
+            "user.parentId": userId, 
+            status: { $in: ["Active", "active", "true", true] }
+          } 
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: "$packageAmount" }
+          }
         }
-      },
-      { $count: "count" }
+      ]),
+
+      // 5. Total Team Business Amount (optimized)
+      Package.aggregate([
+        {
+          $match: {
+            status: { $in: ["Active", "active", "true", true] }
+          }
+        },
+        {
+          $lookup: {
+            from: "users",
+            localField: "userId",
+            foreignField: "userId",
+            as: "user"
+          }
+        },
+        { $unwind: "$user" },
+        {
+          $match: {
+            "user.parentId": { $ne: null }
+          }
+        },
+        {
+          $graphLookup: {
+            from: "users",
+            startWith: "$user.parentId",
+            connectFromField: "parentId",
+            connectToField: "userId",
+            as: "network",
+            maxDepth: 100,
+            restrictSearchWithMatch: {
+              $or: [
+                { parentId: userId },
+                { "network.userId": userId }
+              ]
+            }
+          }
+        },
+        {
+          $match: {
+            "network.userId": userId
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: "$packageAmount" }
+          }
+        }
+      ]),
+
+      // 6. Reward status counts (optimized)
+      User.aggregate([
+        { $match: { parentId: userId } },
+        {
+          $graphLookup: {
+            from: "users",
+            startWith: "$userId",
+            connectFromField: "userId",
+            connectToField: "parentId",
+            as: "downlineTeam",
+            maxDepth: 100
+          }
+        },
+        { $unwind: "$downlineTeam" },
+        {
+          $match: {
+            "downlineTeam.rewardStatus": { $ne: null, $exists: true }
+          }
+        },
+        {
+          $group: {
+            _id: {
+              directReferralId: "$userId",
+              rewardStatus: "$downlineTeam.rewardStatus"
+            }
+          }
+        },
+        {
+          $group: {
+            _id: "$_id.rewardStatus",
+            count: { $sum: 1 }
+          }
+        }
+      ])
     ]);
 
-    // 2. Self Investment (sum of ALL user's packages - both active and inactive)
-    const selfInvestment = await Package.aggregate([
-      { $match: { userId } }, // Removed status filter
-      {
-        $group: {
-          _id: null,
-          total: { $sum: "$packageAmount" }
-        }
-      }
-    ]);
-
-    // 3. Total Direct Business Amount (sum of direct referrals' active packages)
-    const directBusiness = await Package.aggregate([
-      {
-        $lookup: {
-          from: "users",
-          localField: "userId",
-          foreignField: "userId",
-          as: "user"
-        }
-      },
-      { $unwind: "$user" },
-      { $match: { 
-        "user.parentId": userId, 
-        $or: [
-          { status: "Active" },
-          { status: "active" },
-          { status: "true" },
-          { status: true }
-        ]
-      } },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: "$packageAmount" }
-        }
-      }
-    ]);
-
-    // 4. Total Team Size (all referrals at any level)
+    // Get team size separately as it might be memory intensive
     const teamSize = await getNetworkTree(userId, 100).then(res => res.length);
 
-    // 5. Total Team Business Amount (all referrals' active packages)
-    const teamBusiness = await Package.aggregate([
-      {
-        $lookup: {
-          from: "users",
-          localField: "userId",
-          foreignField: "userId",
-          as: "user"
-        }
-      },
-      { $unwind: "$user" },
-      { 
-        $match: { 
-          "user.parentId": { $ne: null }, // Exclude root user
-          $or: [
-            { status: "Active" },
-            { status: "active" },
-            { status: "true" },
-            { status: true }
-          ]
-        } 
-      },
-      {
-        $graphLookup: {
-          from: "users",
-          startWith: "$user.parentId",
-          connectFromField: "parentId",
-          connectToField: "userId",
-          as: "network",
-          maxDepth: 100
-        }
-      },
-      {
-        $match: {
-          "network.userId": userId
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: "$packageAmount" }
-        }
-      }
-    ]);
-
-    // 6. Direct RewardStatus Counts - Count direct referrals by their rewardStatus
-    const directRewardStatusCounts = await User.aggregate([
-      { $match: { parentId: userId } },
-      {
-        $group: {
-          _id: "$rewardStatus",
-          count: { $sum: 1 }
-        }
-      }
-    ]);
-
-    // Convert array to object for easier access
+    // Convert reward status counts to object
     const rewardStatusMap = {};
-    directRewardStatusCounts.forEach(item => {
+    rewardStatusCounts.forEach(item => {
       rewardStatusMap[item._id] = item.count;
     });
 
@@ -327,22 +360,18 @@ async function getRankAndReward(req, res) {
         totalTeamSize: teamSize,
         totalTeamBusinessAmount: teamBusiness[0]?.total || 0,
         
-        // Direct RewardStatus counts for rank progression requirements
-        directSupervisors: rewardStatusMap["Supervisor"] || 0,
-        directGeneralManagers: rewardStatusMap["General Manager"] || 0,
-        directDirectors: rewardStatusMap["Director"] || 0,
-        directPresidents: rewardStatusMap["President"] || 0,
-        directStarPresidents: rewardStatusMap["Star President"] || 0,
-        directCrownStars: rewardStatusMap["Crown Star"] || 0,
+        supervisorCount: rewardStatusMap["Supervisor"] || 0,
+        generalManagerCount: rewardStatusMap["General Manager"] || 0,
+        directorCount: rewardStatusMap["Director"] || 0,
+        presidentCount: rewardStatusMap["President"] || 0,
+        starPresidentCount: rewardStatusMap["Star President"] || 0,
+        crownStarCount: rewardStatusMap["Crown Star"] || 0,
         
-        // Additional counts for other ranks (optional)
-        directUsers: rewardStatusMap["User"] || 0,
-        directAssociates: rewardStatusMap["Associate"] || 0,
-        directTeamLeaders: rewardStatusMap["Team Leader"] || 0,
-        directChairman: rewardStatusMap["Chairman"] || 0,
+        associateCount: rewardStatusMap["Associate"] || 0,
+        teamLeaderCount: rewardStatusMap["Team Leader"] || 0,
+        chairmanCount: rewardStatusMap["Chairman"] || 0,
         
-        // Complete breakdown for debugging/admin purposes
-        allDirectRewardStatusCounts: rewardStatusMap
+        allRewardStatusCounts: rewardStatusMap
       }
     });
 
@@ -355,7 +384,6 @@ async function getRankAndReward(req, res) {
     });
   }
 }
-
 
 
 
