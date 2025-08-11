@@ -255,7 +255,7 @@ async function getRankAndReward(req, res) {
         }
       ]),
 
-      // 5. Total Team Business Amount (optimized)
+      // 5. Total Team Business Amount (corrected)
       Package.aggregate([
         {
           $match: {
@@ -273,7 +273,7 @@ async function getRankAndReward(req, res) {
         { $unwind: "$user" },
         {
           $match: {
-            "user.parentId": { $ne: null }
+            "user.userId": { $ne: userId } // Exclude user's own packages
           }
         },
         {
@@ -283,13 +283,7 @@ async function getRankAndReward(req, res) {
             connectFromField: "parentId",
             connectToField: "userId",
             as: "network",
-            maxDepth: 100,
-            restrictSearchWithMatch: {
-              $or: [
-                { parentId: userId },
-                { "network.userId": userId }
-              ]
-            }
+            maxDepth: 100
           }
         },
         {
@@ -305,7 +299,7 @@ async function getRankAndReward(req, res) {
         }
       ]),
 
-      // 6. Reward status counts (optimized)
+      // 6. Reward status counts
       User.aggregate([
         { $match: { parentId: userId } },
         {
