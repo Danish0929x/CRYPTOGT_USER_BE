@@ -298,46 +298,72 @@ async function getRankAndReward(req, res) {
         },
       ]),
 
-      // 5. Modified to exclude specific statuses and get details
+      // 5. Fixed aggregation to count both direct members and their team members
       User.aggregate([
         { $match: { parentId: userId } }, // Start with direct referrals
         {
-          $lookup: {
+          // Get the entire team under each direct referral
+          $graphLookup: {
             from: "users",
-            localField: "userId",
-            foreignField: "parentId",
-            as: "directTeam",
-          },
+            startWith: "$userId",
+            connectFromField: "userId", 
+            connectToField: "parentId",
+            as: "teamMembers",
+            maxDepth: 100
+          }
         },
-        { $unwind: "$directTeam" },
         {
+          // Add the direct referral itself to the team members array
+          $addFields: {
+            allMembers: {
+              $concatArrays: [
+                [{ 
+                  userId: "$userId", 
+                  name: "$name", 
+                  rewardStatus: "$rewardStatus",
+                  joinDate: "$joinDate",
+                  investment: "$investment"
+                }],
+                "$teamMembers"
+              ]
+            }
+          }
+        },
+        {
+          // Unwind to process each team member individually
+          $unwind: "$allMembers"
+        },
+        {
+          // Filter out excluded statuses and null/undefined values
           $match: {
-            "directTeam.rewardStatus": {
+            "allMembers.rewardStatus": {
               $ne: null,
               $exists: true,
-              $nin: statusesToExclude, // Exclude the specified statuses
+              $nin: statusesToExclude,
             },
           },
         },
         {
+          // Group by direct referral and reward status
           $group: {
             _id: {
               directReferralId: "$userId",
-              directReferralName: "$name",
-              rewardStatus: "$directTeam.rewardStatus",
+              directReferralName: "$name", 
+              rewardStatus: "$allMembers.rewardStatus"
             },
             members: {
               $push: {
-                userId: "$directTeam.userId",
-                name: "$directTeam.name",
-                rewardStatus: "$directTeam.rewardStatus",
-                joinDate: "$directTeam.joinDate",
-                investment: "$directTeam.investment",
+                userId: "$allMembers.userId",
+                name: "$allMembers.name",
+                rewardStatus: "$allMembers.rewardStatus",
+                joinDate: "$allMembers.joinDate",
+                investment: "$allMembers.investment",
               },
             },
           },
         },
         {
+          // Group by reward status to get counts
           $group: {
             _id: "$_id.rewardStatus",
             count: { $sum: 1 },
