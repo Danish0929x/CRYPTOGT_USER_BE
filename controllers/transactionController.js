@@ -30,7 +30,7 @@ exports.getTransactions = async (req, res) => {
     // Get transactions sorted by newest first
     const transactions = await Transaction.find(query)
       .sort({ createdAt: -1 })
-      .limit(500);
+      .limit(2000);
 
     res.status(200).json({ 
       success: true, 
