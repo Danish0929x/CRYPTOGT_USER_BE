@@ -57,7 +57,7 @@ async function getReferralNetwork(req, res) {
 
     const formattedReferrals = referrals.map((ref) => ({
       userId: ref.userId || "none",
-      name: ref.name || "Anonymous",
+      name: ref.name || "No Name",
       level: ref.level,
       investment: ref.investment || 0,
       joinDate: ref.createdAt || "none",
