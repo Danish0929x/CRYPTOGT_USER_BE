@@ -1,12 +1,11 @@
 const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
 const { performWalletTransaction } = require('../utils/performWalletTransaction');
-const getLiveRate = require('../utils/liveRateUtils');
 
 /**
- * Withdraw CGT equivalent of given USD amount
+ * Withdraw USDT equivalent of given USD amount
  */
-const withdrawCGT = async (req, res) => {
+const withdrawUSDT = async (req, res) => {
   try {
     const userId = req.user.userId;
     const { amount } = req.body; // amount in USD
@@ -20,22 +19,12 @@ const withdrawCGT = async (req, res) => {
     }
 
     const usdAmount = Number(amount);
-    const liveRate = await getLiveRate();
 
-    if (!liveRate || liveRate <= 0) {
-      return res.status(500).json({ 
-        success: false,
-        message: 'Live rate not available. Please try again later.' 
-      });
-    }
-
-    const cgtToWithdraw = parseFloat((usdAmount / liveRate).toFixed(5)); // CGT value
-
-    // 2. Check for existing pending withdrawal
+    // 2. Check for existing pending withdrawal (transaction remark starts with "Withdraw USDT")
     const pendingWithdrawal = await Transaction.findOne({
       userId,
       status: 'Pending',
-      transactionRemark: 'Withdraw CGT - Dollar Equivalent Withdrawal'
+      transactionRemark: { $regex: '^Withdraw USDT' }
     });
 
     if (pendingWithdrawal) {
@@ -54,27 +43,29 @@ const withdrawCGT = async (req, res) => {
       });
     }
 
-    if (wallet.USDTBalance < cgtToWithdraw) {
+    if (wallet.USDTBalance < usdAmount) {
       return res.status(400).json({ 
         success: false,
         message: 'Insufficient USDT balance' 
       });
     }
 
-    // 4. Check if user already withdrew today (completed withdrawals)
-    const now = new Date();
+    // 4. Check if user already withdrew today (completed withdrawals with transaction remark starting with "Withdraw USDT")
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    
+    const endOfDay = new Date();
+    endOfDay.setHours(23, 59, 59, 999);
+
     const withdrawnToday = await Transaction.findOne({
       userId,
       debitedAmount: { $gt: 0 },
-      transactionRemark: 'Withdraw CGT - Dollar Equivalent Withdrawal',
+      transactionRemark: { $regex: '^Withdraw USDT' },
       walletName: 'USDTBalance',
       status: 'Completed',
-      $expr: {
-        $and: [
-          { $eq: [{ $year: "$createdAt" }, now.getFullYear()] },
-          { $eq: [{ $month: "$createdAt" }, now.getMonth() + 1] },
-          { $eq: [{ $dayOfMonth: "$createdAt" }, now.getDate()] }
-        ]
+      createdAt: {
+        $gte: startOfDay,
+        $lte: endOfDay
       }
     });
 
@@ -88,9 +79,9 @@ const withdrawCGT = async (req, res) => {
     // 5. Perform transaction
     await performWalletTransaction(
       userId,
-      -cgtToWithdraw,
+      -usdAmount,
       'USDTBalance',
-      'Withdraw CGT - Dollar Equivalent Withdrawal',
+      'Withdraw USDT - Withdraw USDT',
       'Pending'
     );
 
@@ -98,14 +89,12 @@ const withdrawCGT = async (req, res) => {
       success: true,
       message: 'Withdrawal request submitted successfully',
       data: {
-        CGTAmount: cgtToWithdraw,
         USDRequested: usdAmount,
-        liveRate,
         status: 'Pending'
       }
     });
   } catch (error) {
-    console.error('Withdraw CGT error:', error);
+    console.error('Withdraw USDT error:', error);
     res.status(500).json({ 
       success: false,
       message: 'Internal Server Error',
@@ -115,5 +104,5 @@ const withdrawCGT = async (req, res) => {
 };
 
 module.exports = {
-  withdrawCGT
+  withdrawUSDT
 };
