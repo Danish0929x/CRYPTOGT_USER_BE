@@ -37,6 +37,8 @@ app.use('/api/transaction', require('./routes/transactionRoutes'));
 
 app.use('/api/withdraw', require('./routes/withdrawRoutes'));
 
+app.use('/api/autopool', require('./routes/autopoolRoutes'));
+
 
 // Simple health check
 app.get('/', (req, res) => {
