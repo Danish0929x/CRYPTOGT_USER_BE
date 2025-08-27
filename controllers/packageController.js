@@ -3,6 +3,7 @@ const { distributeDirectBonus } = require("../functions/directDistributeBonus");
 const getLiveRate = require("../utils/liveRateUtils");
 const Wallet = require("../models/Wallet");
 const { performWalletTransaction } = require("../utils/performWalletTransaction");
+const { distributeUSTDirectBonus } = require("../functions/distributeUSDTDirectBonus");
 
 exports.createPackage = async (req, res) => {
   try {
@@ -35,7 +36,7 @@ exports.createPackage = async (req, res) => {
     await newPackage.save();
 
     // Distribute direct bonus to parent
-    await distributeDirectBonus(newPackage.packageAmount, userId);
+    await distributeUSTDirectBonus(newPackage.packageAmount, userId);
 
     res.status(201).json({
       success: true,
