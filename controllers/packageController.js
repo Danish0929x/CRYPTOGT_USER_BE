@@ -36,7 +36,21 @@ exports.createPackage = async (req, res) => {
     await newPackage.save();
 
     // Distribute direct bonus to parent
-    await distributeUSTDirectBonus(newPackage.packageAmount, userId);
+
+    // Check if user already had packages before this one
+    const existingPackagesCount = await Package.countDocuments({
+      userId,
+      _id: { $ne: newPackage._id }, // exclude the newly created one
+    });
+
+    if (existingPackagesCount > 0) {
+      // User already has package → call distributeDirectBonus
+      await distributeDirectBonus(newPackage.packageAmount, userId);
+    } else {
+      // User has no previous package → call distributeUSTDirectBonus
+      await distributeUSTDirectBonus(newPackage.packageAmount, userId);
+    }
+
 
     res.status(201).json({
       success: true,
