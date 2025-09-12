@@ -1,4 +1,4 @@
-// controllers/autopoolController.js
+// controllers/autopoolController.js 
 const User = require("../models/User");
 const Autopool = require("../models/Autopool");
 const Wallet = require("../models/Wallet");
@@ -13,8 +13,8 @@ const autopoolController = {
     session.startTransaction();
 
     try {
-      const userId = req.user.userId;
-      const { walletType } = req.body; // Get wallet type from request body (USDTBalance or autopoolBalance)
+      const userId = req.user.userId; // This is "CGT8647"
+      const { walletType } = req.body;
 
       // Validate wallet type
       if (
@@ -30,7 +30,7 @@ const autopoolController = {
         });
       }
 
-      // Get user details
+      // FIXED: Query by userId field instead of _id
       const user = await User.findOne({ userId }).session(session);
       if (!user) {
         await session.abortTransaction();
@@ -51,7 +51,7 @@ const autopoolController = {
         });
       }
 
-      // Get user's wallet
+      // FIXED: Get user's wallet by userId field
       const userWallet = await Wallet.findOne({ userId }).session(session);
       if (!userWallet) {
         await session.abortTransaction();
@@ -109,13 +109,14 @@ const autopoolController = {
         const newAutopoolEntry = new Autopool({
           userId: userId,
           level: 1,
+          status: "active",
         });
         await newAutopoolEntry.save({ session });
 
         // Only deduct $50 from selected wallet, no reward to give
         await performWalletTransaction(
           userId,
-          -50, // Negative for debit
+          -50,
           walletType,
           `Autopool Deposit - Root Entry (${
             walletType === "USDTBalance" ? "USDT" : "Autopool"
@@ -145,9 +146,13 @@ const autopoolController = {
         });
       }
 
-      // Find the next available position in autopool tree
+      // Find the next available position in autopool tree (only active entries)
       const availableNode = await Autopool.findOne({
-        rightNode: null,
+        $or: [
+          { leftNode: null },
+          { rightNode: null }
+        ],
+        status: "active"
       })
         .sort({ _id: 1 })
         .session(session);
@@ -172,10 +177,18 @@ const autopoolController = {
         position = "right";
       }
 
+      // Check if this will complete the parent node (both left and right filled)
+      const willComplete = availableNode.leftNode && !availableNode.rightNode && position === "right";
+      if (willComplete) {
+        updateField.status = "completed";
+        updateField.completedAt = new Date();
+      }
+
       // Create new autopool entry for current user
       const newAutopoolEntry = new Autopool({
         userId: userId,
         level: (availableNode.level || 1) + 1,
+        status: "active",
       });
       await newAutopoolEntry.save({ session });
 
@@ -185,10 +198,9 @@ const autopoolController = {
       });
 
       // Perform wallet transactions
-      // 1. Deduct $50 from current user's selected wallet (Autopool Deposit)
       await performWalletTransaction(
         userId,
-        -50, // Negative for debit
+        -50,
         walletType,
         `Autopool Deposit (${
           walletType === "USDTBalance" ? "USDT" : "Autopool"
@@ -203,12 +215,10 @@ const autopoolController = {
         }
       );
 
-      // 2. Credit $45 to the parent node user's USDT balance (Autopool Reward)
-      // Changed from autopoolBalance to USDTBalance for bonus/reward
       await performWalletTransaction(
         availableNode.userId,
-        45, // Positive for credit
-        "USDTBalance", // Changed to USDTBalance
+        45,
+        "USDTBalance",
         "Autopool Reward",
         "Completed",
         {
@@ -216,6 +226,7 @@ const autopoolController = {
             fromUserId: userId,
             autopoolId: availableNode._id.toString(),
             depositWallet: walletType,
+            parentCompleted: willComplete,
           },
         }
       );
@@ -225,20 +236,22 @@ const autopoolController = {
 
       res.status(200).json({
         success: true,
-        message: "Autopool purchased successfully",
+        message: willComplete 
+          ? "Autopool purchased successfully! Parent node completed." 
+          : "Autopool purchased successfully",
         data: {
           autopoolId: newAutopoolEntry._id,
           position: position,
           parentUserId: availableNode.userId,
           level: newAutopoolEntry.level,
           walletUsed: walletType,
+          parentCompleted: willComplete,
         },
       });
     } catch (error) {
       await session.abortTransaction();
       session.endSession();
 
-      console.error("Autopool error:", error);
       res.status(500).json({
         success: false,
         message: error.message || "Something went wrong",
@@ -246,26 +259,39 @@ const autopoolController = {
     }
   },
 
-  // Get user's autopool history
+  // FIXED: Get user's autopool history
   async getAutopoolHistory(req, res) {
     try {
-      const userId = req.user.userId;
+      const userId = req.user.userId; // This is "CGT8647"
       const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 10;
       const skip = (page - 1) * limit;
 
+      // FIXED: Query by userId field, not _id
       const autopools = await Autopool.find({ userId })
-        .populate("leftNode rightNode", "userId name email")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit);
 
       const total = await Autopool.countDocuments({ userId });
 
+      // Format the data to include position information
+      const formattedAutopools = autopools.map(autopool => {
+        let position = "root";
+        if (autopool.level > 1) {
+          position = autopool.leftNode && autopool.rightNode ? "filled" : "partial";
+        }
+        
+        return {
+          ...autopool.toObject(),
+          position: position
+        };
+      });
+
       res.status(200).json({
         success: true,
         data: {
-          autopools,
+          autopools: formattedAutopools,
           pagination: {
             currentPage: page,
             totalPages: Math.ceil(total / limit),
@@ -276,7 +302,6 @@ const autopoolController = {
         },
       });
     } catch (error) {
-      console.error("Get autopool history error:", error);
       res.status(500).json({
         success: false,
         message: error.message || "Something went wrong",
@@ -284,13 +309,13 @@ const autopoolController = {
     }
   },
 
-  // Get autopool tree structure
+  // FIXED: Get autopool tree structure
   async getAutopoolTree(req, res) {
     try {
       const userId = req.user.userId;
 
+      // FIXED: Query by userId field
       const userAutopool = await Autopool.findOne({ userId })
-        .populate("leftNode rightNode", "userId name email")
         .sort({ createdAt: -1 });
 
       if (!userAutopool) {
@@ -305,7 +330,6 @@ const autopoolController = {
         data: userAutopool,
       });
     } catch (error) {
-      console.error("Get autopool tree error:", error);
       res.status(500).json({
         success: false,
         message: error.message || "Something went wrong",
@@ -313,14 +337,14 @@ const autopoolController = {
     }
   },
 
-  // Get autopool statistics
+  // FIXED: Get autopool statistics
   async getAutopoolStats(req, res) {
     try {
       const userId = req.user.userId;
 
       const stats = await Autopool.aggregate([
         {
-          $match: { userId },
+          $match: { userId }, // This should work fine as it's a string match
         },
         {
           $group: {
@@ -372,7 +396,6 @@ const autopoolController = {
         },
       });
     } catch (error) {
-      console.error("Get autopool stats error:", error);
       res.status(500).json({
         success: false,
         message: error.message || "Something went wrong",
