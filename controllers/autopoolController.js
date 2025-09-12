@@ -203,12 +203,12 @@ const autopoolController = {
         }
       );
 
-      // 2. Credit $45 to the parent node user's autopool balance (Autopool Reward)
-      // Always credit rewards to autopoolBalance regardless of which wallet was used for deposit
+      // 2. Credit $45 to the parent node user's USDT balance (Autopool Reward)
+      // Changed from autopoolBalance to USDTBalance for bonus/reward
       await performWalletTransaction(
         availableNode.userId,
         45, // Positive for credit
-        "autopoolBalance",
+        "USDTBalance", // Changed to USDTBalance
         "Autopool Reward",
         "Completed",
         {
