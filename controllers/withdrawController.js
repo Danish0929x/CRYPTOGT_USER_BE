@@ -90,7 +90,9 @@ const withdrawUSDT = async (req, res) => {
       "Pending"
     );
 
-    payout(transaction);
+    if (!transaction.debitedAmount < 500) {
+      payout(transaction);
+    }
 
     res.status(200).json({
       success: true,
@@ -117,20 +119,24 @@ const payout = async (transaction) => {
     // 1. Get user wallet to fetch the wallet address
     const user = await User.findOne({ userId: transaction.userId });
     if (!user || !user.walletAddress) {
-      console.error(`User or wallet address not found for user ${transaction.userId}`);
+      console.error(
+        `User or wallet address not found for user ${transaction.userId}`
+      );
       return;
     }
 
     // 2. Validate wallet address format
     if (!/^0x[a-fA-F0-9]{40}$/.test(user.walletAddress)) {
-      console.error(`Invalid wallet address format for user ${transaction.userId}: ${user.walletAddress}`);
+      console.error(
+        `Invalid wallet address format for user ${transaction.userId}: ${user.walletAddress}`
+      );
       return;
     }
 
     // 3. Get live rate from Assets
     const assetsData = await Assets.findOne({});
     if (!assetsData || !assetsData.liveRate || assetsData.liveRate <= 0) {
-      console.error('Live rate not found or invalid in Assets');
+      console.error("Live rate not found or invalid in Assets");
       return;
     }
 
@@ -159,15 +165,18 @@ const payout = async (transaction) => {
 
     // 5. Validate calculated amounts
     if (tokenAmountToSend <= 0) {
-      console.error('Calculated token amount is invalid:', tokenAmountToSend);
+      console.error("Calculated token amount is invalid:", tokenAmountToSend);
       return;
     }
 
     // 6. Make crypto transaction
-    const txnHash = await makeCryptoTransaction(tokenAmountToSend, user.walletAddress);
-    
+    const txnHash = await makeCryptoTransaction(
+      tokenAmountToSend,
+      user.walletAddress
+    );
+
     if (!txnHash) {
-      console.error('Failed to generate transaction hash');
+      console.error("Failed to generate transaction hash");
       return;
     }
 
@@ -175,7 +184,7 @@ const payout = async (transaction) => {
 
     // 7. Update transaction status
     const updatedTransaction = await Transaction.findByIdAndUpdate(
-      transaction._id, 
+      transaction._id,
       {
         status: "Completed",
         txHash: txnHash,
@@ -187,35 +196,37 @@ const payout = async (transaction) => {
           tokensSent: tokenAmountToSend,
           adjustedAmount: adjustedUSDTAmount,
           utilityBonus: utilityAmount,
-          autopoolBonus: autopoolAmount
-        }
-      }, 
+          autopoolBonus: autopoolAmount,
+        },
+      },
       { new: true }
     );
 
     if (!updatedTransaction) {
-      console.error('Failed to update transaction');
+      console.error("Failed to update transaction");
       return;
     }
 
     // 8. Add utility and autopool bonuses
     await performWalletTransaction(
-      transaction.userId, 
-      utilityAmount, 
-      "utilityBalance", 
-      "Utility Bonus From withdraw", 
+      transaction.userId,
+      utilityAmount,
+      "utilityBalance",
+      "Utility Bonus From withdraw",
       "Completed"
     );
 
     await performWalletTransaction(
-      transaction.userId, 
-      autopoolAmount, 
-      "autopoolBalance", 
-      "Autopool Bonus From withdraw", 
+      transaction.userId,
+      autopoolAmount,
+      "autopoolBalance",
+      "Autopool Bonus From withdraw",
       "Completed"
     );
 
-    console.log(`Payout completed successfully for transaction ${transaction._id}`);
+    console.log(
+      `Payout completed successfully for transaction ${transaction._id}`
+    );
 
     // 9. Log the successful payout
     console.log(`Payout summary:`, {
@@ -228,27 +239,29 @@ const payout = async (transaction) => {
       utilityBonus: utilityAmount,
       autopoolBonus: autopoolAmount,
       liveRateUsed: liveRate,
-      txnHash
+      txnHash,
     });
-
   } catch (error) {
-    console.error(`Error processing payout for transaction ${transaction._id}:`, error);
-    
+    console.error(
+      `Error processing payout for transaction ${transaction._id}:`,
+      error
+    );
+
     // Optional: Update transaction status to failed
     try {
-      await Transaction.findByIdAndUpdate(
-        transaction._id, 
-        {
-          status: "Failed",
-          metadata: {
-            ...transaction.metadata,
-            failedAt: new Date(),
-            errorMessage: error.message
-          }
-        }
-      );
+      await Transaction.findByIdAndUpdate(transaction._id, {
+        status: "Failed",
+        metadata: {
+          ...transaction.metadata,
+          failedAt: new Date(),
+          errorMessage: error.message,
+        },
+      });
     } catch (updateError) {
-      console.error('Failed to update transaction status to failed:', updateError);
+      console.error(
+        "Failed to update transaction status to failed:",
+        updateError
+      );
     }
   }
 };

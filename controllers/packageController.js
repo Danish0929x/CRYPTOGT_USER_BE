@@ -48,7 +48,7 @@ exports.createPackage = async (req, res) => {
       await distributeDirectBonus(newPackage.packageAmount, userId);
     } else {
       // User has no previous package → call distributeUSTDirectBonus
-      await distributeUSTDirectBonus(newPackage.packageAmount, userId);
+      // await distributeUSTDirectBonus(newPackage.packageAmount, userId);
     }
 
 
