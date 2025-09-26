@@ -4,6 +4,7 @@ const Transaction = require("../models/Transaction");
 const { makeCryptoTransaction } = require("../utils/makeUSDTCryptoTransaction");
 
 async function distributeUSTDirectBonus(packageAmount, userId) {
+  console.log("Direct Bonus Triggered for user:", userId, "with package amount:", packageAmount); 
   try {
     // Get the user who purchased the package
     const user = await User.findOne({ userId });
