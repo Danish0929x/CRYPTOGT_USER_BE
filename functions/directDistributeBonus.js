@@ -24,7 +24,9 @@ async function distributeDirectBonus(packageAmount, userId) {
       status: "Active" 
     });
 
-    if (!parentHasActivePackage) {
+    
+
+    if (!parentHasActivePackage ) {
       console.log(`Parent ${user.parentId} has no active package. Bonus not distributed.`);
       return;
     }

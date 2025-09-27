@@ -3,7 +3,6 @@ const { distributeDirectBonus } = require("../functions/directDistributeBonus");
 const getLiveRate = require("../utils/liveRateUtils");
 const Wallet = require("../models/Wallet");
 const { performWalletTransaction } = require("../utils/performWalletTransaction");
-const { distributeUSTDirectBonus } = require("../functions/distributeUSDTDirectBonus");
 
 exports.createPackage = async (req, res) => {
   try {

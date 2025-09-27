@@ -167,6 +167,87 @@ exports.getWallet = async (req, res) => {
 };
 
 
+exports.getRetopup = async (req, res) => {
+  try {
+    const walletAddress = req.user.walletAddress;
+    console.log("Wallet Address:", walletAddress);
+    
+    if (!walletAddress) {
+      return res.status(400).json({
+        success: false,
+        message: "Wallet address is required",
+      });
+    }
+
+    const user = await User.findOne({ walletAddress });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const wallet = await Wallet.findOne({ userId: user.userId });
+    if (!wallet) {
+      return res.status(404).json({
+        success: false,
+        message: "Wallet not found",
+      });
+    }
+
+    // Get user's packages for total investment calculation
+    const userPackages = await Packages.find({ userId: user.userId });
+    const totalInvestment = userPackages.reduce(
+      (sum, pkg) => sum + (pkg.packageAmount || 0),
+      0
+    );
+
+    // Calculate total bonus earned
+    const bonusInfo = await Transaction.aggregate([
+      {
+        $match: {
+          userId: user.userId,
+          transactionRemark: { $regex: /Bonus/i } // Case-insensitive bonus match
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalBonusEarned: { $sum: "$creditedAmount" },
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const retopupData = {
+      walletAddress: user.walletAddress,
+      userId: user.userId,
+      USDTBalance: wallet.USDTBalance,
+      autopoolBalance: wallet.autopoolBalance,
+      utilityBalance: wallet.utilityBalance,
+      totalInvestment,
+      totalBonusEarned: bonusInfo[0]?.totalBonusEarned || 0,
+      createdAt: wallet.createdAt,
+      lastUpdated: wallet.updatedAt,
+    };
+
+    return res.status(200).json({
+      success: true,
+      message: "Retopup data retrieved successfully",
+      data: retopupData
+    });
+
+  } catch (error) {
+    console.error("Error fetching retopup data:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to get retopup data",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined
+    });
+  }
+};
+
+
 // ROUTE: Get Dashboard Data including all packages
 exports.getDashboard = async (req, res) => {
   try {
