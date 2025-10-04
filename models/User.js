@@ -57,6 +57,16 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false, // Default to false
     },
+     connectedCGTHomesEmail: {
+      type: String,
+      default: null,
+      sparse: true, // Allows multiple null values but unique non-null values
+    },
+    // NEW FIELD: Connection timestamp
+    cgtHomesConnectedAt: {
+      type: Date,
+      default: null,
+    },
   },
   { timestamps: true }
 );
