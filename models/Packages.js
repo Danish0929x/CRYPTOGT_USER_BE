@@ -36,6 +36,16 @@ const packageSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    directMember: {
+      type: [String],
+      default: [],
+    },
+    type: {
+      type: String,
+      required: true,
+      enum: ["Buy", "ReTopup"],
+      default: "Buy",
+    },
     startDate: {
       type: Date,
       required: true,
@@ -43,7 +53,7 @@ const packageSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["Active", "Inactive", "Requested"],
+      enum: ["Active", "Inactive", "Requested", "Matured"],
       default: "Requested",
     },
   },

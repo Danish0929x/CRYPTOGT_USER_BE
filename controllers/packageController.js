@@ -3,6 +3,8 @@ const { distributeDirectBonus } = require("../functions/directDistributeBonus");
 const getLiveRate = require("../utils/liveRateUtils");
 const Wallet = require("../models/Wallet");
 const { performWalletTransaction } = require("../utils/performWalletTransaction");
+const { handleDirectMembers } = require("../functions/checkProductVoucher");
+
 
 exports.createPackage = async (req, res) => {
   try {
@@ -30,9 +32,14 @@ exports.createPackage = async (req, res) => {
       poi: 0,
       startDate: new Date(),
       status: "Requested", // Using boolean true instead of string
+      type: "Buy" 
     });
 
     await newPackage.save();
+
+    //productVoucher
+    await handleDirectMembers(userId, req.user.sponsorId); // Make sure sponsorId is available in req.user
+
 
     // Distribute direct bonus to parent
 
@@ -116,6 +123,7 @@ exports.reTopUp = async (req, res) => {
       poi: 0,
       startDate: new Date(),
       status: "Active", // Using boolean true instead of string
+      type: "ReTopup"  
     });
 
     await newPackage.save();
