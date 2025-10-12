@@ -1,6 +1,6 @@
 const Package = require("../models/Packages");
 
-async function handleDirectMembers(userId, sponsorId) {
+async function handleDirectMembers(userId, sponsorId, newPackageId) {
   try {
     // Get sponsor's latest package where productVoucher is false and type is "Buy"
     const sponsorLatestPackage = await Package.findOne(
@@ -14,11 +14,11 @@ async function handleDirectMembers(userId, sponsorId) {
     );
 
     if (sponsorLatestPackage) {
-      // Add new user to sponsor's directMember array
+      // Add new package ID to sponsor's directMember array (allows duplicates for same user)
       await Package.findByIdAndUpdate(
         sponsorLatestPackage._id,
         {
-          $addToSet: { directMember: userId },
+          $push: { directMember: newPackageId },
         }
       );
 

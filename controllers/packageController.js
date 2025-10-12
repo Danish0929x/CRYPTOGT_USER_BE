@@ -4,6 +4,7 @@ const getLiveRate = require("../utils/liveRateUtils");
 const Wallet = require("../models/Wallet");
 const { performWalletTransaction } = require("../utils/performWalletTransaction");
 const { handleDirectMembers } = require("../functions/checkProductVoucher");
+const User = require("../models/User");
 
 
 exports.createPackage = async (req, res) => {
@@ -11,6 +12,14 @@ exports.createPackage = async (req, res) => {
     const userId = req.user.userId;
     const { packageAmount, txnId } = req.body;
     const liveRate = await getLiveRate();
+
+    const user = await User.findOne({ userId: userId });
+    if(!user){
+      return res.status(400).json({
+        success: false,
+        message: "User not found",
+      });
+    }
 
     if (!userId || !packageAmount) {
       return res.status(400).json({
@@ -38,7 +47,7 @@ exports.createPackage = async (req, res) => {
     await newPackage.save();
 
     //productVoucher
-    await handleDirectMembers(userId, req.user.sponsorId); // Make sure sponsorId is available in req.user
+    await handleDirectMembers(userId, user.parentId, newPackage._id); // Make sure sponsorId is available in req.user
 
 
     // Distribute direct bonus to parent
