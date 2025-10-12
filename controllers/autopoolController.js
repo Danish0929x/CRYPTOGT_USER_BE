@@ -41,8 +41,8 @@ const autopoolController = {
         });
       }
 
-      // Check if user is blocked
-      if (user.blockStatus || user.isRewardBlock) {
+      // Check if user is blocked or 
+      if (user.blockStatus) {
         await session.abortTransaction();
         session.endSession();
         return res.status(403).json({
