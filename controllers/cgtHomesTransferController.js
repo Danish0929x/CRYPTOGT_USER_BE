@@ -120,7 +120,7 @@ const withdrawUSDTToCGTHomes = async (req, res) => {
       // Call the CGT Homes API to add balance to the user's account (85% of original amount)
       const cgtHomesResponse = await axios.post(`${CGT_HOMES_API_URL}/wallet/add-balance`, {
         email: user.connectedCGTHomesEmail,
-        amount: transferAmount,
+        amount: transferAmount * 90,
         transactionRemark: `Transfer from CryptoGT - User: ${userId}`,
         liveToken: transferAmount,
         status: "Success"
