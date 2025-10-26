@@ -61,29 +61,68 @@ const withdrawUSDTToCGTHomes = async (req, res) => {
     }
 
 
+    // Calculate amounts based on rates
+    const ADJUSTMENT_RATE = 0.85;
+    const UTILITY_RATE = 0.05;
+    const AUTOPOOL_RATE = 0.05;
+    
+    const transferAmount = amountToWithdraw * ADJUSTMENT_RATE;
+    const utilityAmount = amountToWithdraw * UTILITY_RATE;
+    const autopoolAmount = amountToWithdraw * AUTOPOOL_RATE;
+
     // Perform wallet transaction (deduct from USDT balance)
     const transaction = await performWalletTransaction(
       userId,
-      -amountToWithdraw, // Negative amount for withdrawal
+      -amountToWithdraw, // Negative amount for withdrawal (full amount)
       "USDTBalance",
-      `USDT Transfer to CGT Homes`,
+      `Withdrawal USDT - USDT Transfer to CGT Homes`,
       "Completed", // Mark as completed immediately
       {
         metadata: {
           transferType: "CGTHomes",
-          destinationEmail: user.connectedCGTHomesEmail
+          destinationEmail: user.connectedCGTHomesEmail,
+        }
+      }
+    );
+
+    // Add 5% to utility balance
+    await performWalletTransaction(
+      userId,
+      utilityAmount,
+      "utilityBalance",
+      `Utility allocation from CGT Homes transfer`,
+      "Completed",
+      {
+        metadata: {
+          sourceTransaction: transaction._id,
+          transferType: "CGTHomesUtility"
+        }
+      }
+    );
+
+    // Add 5% to autopool balance
+    await performWalletTransaction(
+      userId,
+      autopoolAmount,
+      "autopoolBalance",
+      `Autopool allocation from CGT Homes transfer`,
+      "Completed",
+      {
+        metadata: {
+          sourceTransaction: transaction._id,
+          transferType: "CGTHomesAutopool"
         }
       }
     );
 
     // Integration with CGT Homes API to credit the amount to the user's CGT Homes account
     try {
-      // Call the CGT Homes API to add balance to the user's account
+      // Call the CGT Homes API to add balance to the user's account (85% of original amount)
       const cgtHomesResponse = await axios.post(`${CGT_HOMES_API_URL}/wallet/add-balance`, {
         email: user.connectedCGTHomesEmail,
-        amount: amountToWithdraw * 90,
+        amount: transferAmount,
         transactionRemark: `Transfer from CryptoGT - User: ${userId}`,
-        liveToken: 90,
+        liveToken: transferAmount,
         status: "Success"
       });
 
@@ -91,12 +130,10 @@ const withdrawUSDTToCGTHomes = async (req, res) => {
         console.error("CGT Homes API responded with an error:", cgtHomesResponse.data);
         // Although we continue with the response, we should log this for reconciliation
       } else {
-        console.log("Successfully added balance to CGT Homes account:", user.connectedCGTHomesEmail);
+        // console.log("Successfully added balance to CGT Homes account:", user.connectedCGTHomesEmail);
       }
     } catch (apiError) {
       console.error("Error calling CGT Homes API:", apiError.message);
-      // We don't want to fail the user's transaction if the API call fails
-      // Instead, log it for manual reconciliation later
     }
 
     return res.status(200).json({
@@ -104,7 +141,10 @@ const withdrawUSDTToCGTHomes = async (req, res) => {
       message: "USDT successfully transferred to CGT Homes",
       data: {
         transactionId: transaction._id,
-        amount: amountToWithdraw,
+        totalAmount: amountToWithdraw,
+        transferredToCGTHomes: transferAmount,
+        utilityAllocation: utilityAmount,
+        autopoolAllocation: autopoolAmount,
         destinationEmail: user.connectedCGTHomesEmail,
         timestamp: transaction.createdAt
       }
