@@ -53,7 +53,7 @@ exports.getUser = async (req, res) => {
 exports.updateUser = async (req, res) => {
   const walletAddress = req.user.walletAddress;
   try {
-    const { name, phone, email } = req.body;
+    const { name, phone, email, walletAddress: newWalletAddress } = req.body;
 
     // Validate walletAddress matches authenticated user
     if (!walletAddress) {
@@ -68,12 +68,13 @@ exports.updateUser = async (req, res) => {
     if (name !== undefined) updates.name = name;
     if (phone !== undefined) updates.phone = phone;
     if (email !== undefined) updates.email = email;
+    if (newWalletAddress !== undefined) updates.walletAddress = newWalletAddress;
 
     // If nothing to update
     if (Object.keys(updates).length === 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "No fields to update" 
+      return res.status(400).json({
+        success: false,
+        message: "No fields to update"
       });
     }
 
@@ -84,9 +85,9 @@ exports.updateUser = async (req, res) => {
     );
 
     if (!updatedUser) {
-      return res.status(404).json({ 
-        success: false, 
-        message: "User not found after update" 
+      return res.status(404).json({
+        success: false,
+        message: "User not found after update"
       });
     }
 
@@ -98,7 +99,8 @@ exports.updateUser = async (req, res) => {
         name: updatedUser.name,
         email: updatedUser.email,
         phone: updatedUser.phone,
-        walletAddress: updatedUser.walletAddress
+        walletAddress: updatedUser.walletAddress,
+        parentId: updatedUser.parentId
       }
     });
 
