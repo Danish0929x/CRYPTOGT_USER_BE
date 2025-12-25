@@ -155,6 +155,60 @@ exports.reTopUp = async (req, res) => {
   }
 };
 
+exports.createHybridPackage = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { amount, txnId } = req.body;
+
+    // Validate user exists
+    const user = await User.findOne({ userId: userId });
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Validate amount (must be 10 USDT for hybrid packages)
+    if (!amount || amount !== 10) {
+      return res.status(400).json({
+        success: false,
+        message: "Hybrid package amount must be 10 USDT",
+      });
+    }
+
+    // Create new hybrid package
+    const newHybridPackage = new Package({
+      userId,
+      packageType: "Hybrid",
+      packageAmount: 10,
+      cgtCoin: 0,
+      txnId: txnId || null,
+      poi: 0,
+      directBonus: false,
+      productVoucher: false,
+      type: "BuyHybrid",
+      startDate: new Date(),
+      status: "Active",
+    });
+
+    await newHybridPackage.save();
+
+    res.status(201).json({
+      success: true,
+      message: "Hybrid package created successfully",
+      data: newHybridPackage,
+    });
+  } catch (err) {
+    console.error("Error creating hybrid package:", err);
+    res.status(500).json({
+      success: false,
+      message: "Server Error",
+      error: err.message,
+    });
+  }
+};
+
 exports.getPackagesByUserId = async (req, res) => {
   try {
     const userId = req.user.userId;
