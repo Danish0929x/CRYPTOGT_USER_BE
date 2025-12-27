@@ -10,7 +10,7 @@ const packageSchema = new mongoose.Schema(
     packageType: {
       type: String,
       required: true,
-      enum: ["Leader", "Investor"],
+      enum: ["Leader", "Investor", "Hybrid"],
       default: "Leader",
     },
     packageAmount: {
@@ -43,13 +43,17 @@ const packageSchema = new mongoose.Schema(
     type: {
       type: String,
       required: true,
-      enum: ["Buy", "ReTopup"],
+      enum: ["Buy", "ReTopup", "BuyHybrid"],
       default: "Buy",
     },
     startDate: {
       type: Date,
       required: true,
       default: Date.now,
+    },
+    endDate: {
+      type: Date,
+      default: null,
     },
     status: {
       type: String,

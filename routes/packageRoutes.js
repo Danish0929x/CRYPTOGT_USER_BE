@@ -5,6 +5,8 @@ const authMiddleware = require('../middlewares/authMiddleware');
 
 router.post('/create-package', authMiddleware, packageController.createPackage);
 router.post('/re-topup', authMiddleware, packageController.reTopUp);
+router.post('/create-hybridPackage', authMiddleware, packageController.createHybridPackage);
 router.get('/getPackagesByUserId', authMiddleware, packageController.getPackagesByUserId);
+router.get('/getHybridPackageByUserId', authMiddleware, packageController.getHybridPackageByUserId);
 
 module.exports = router;

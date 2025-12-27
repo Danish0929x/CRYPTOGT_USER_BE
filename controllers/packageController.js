@@ -155,6 +155,60 @@ exports.reTopUp = async (req, res) => {
   }
 };
 
+exports.createHybridPackage = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { packageAmount, txnId } = req.body;
+
+    // Validate user exists
+    const user = await User.findOne({ userId: userId });
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Validate amount (must be 10 USDT for hybrid packages)
+    if (!packageAmount || packageAmount !== 10) {
+      return res.status(400).json({
+        success: false,
+        message: "Hybrid package amount must be 10 USDT",
+      });
+    }
+
+    // Create new hybrid package
+    const newHybridPackage = new Package({
+      userId,
+      packageType: "Hybrid",
+      packageAmount: 10,
+      cgtCoin: 0,
+      txnId: txnId || null,
+      poi: 0,
+      directBonus: false,
+      productVoucher: false,
+      type: "BuyHybrid",
+      startDate: new Date(),
+      status: "Active",
+    });
+
+    await newHybridPackage.save();
+
+    res.status(201).json({
+      success: true,
+      message: "Hybrid package created successfully",
+      data: newHybridPackage,
+    });
+  } catch (err) {
+    console.error("Error creating hybrid package:", err);
+    res.status(500).json({
+      success: false,
+      message: "Server Error",
+      error: err.message,
+    });
+  }
+};
+
 exports.getPackagesByUserId = async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -194,6 +248,57 @@ exports.getPackagesByUserId = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch packages",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+exports.getHybridPackageByUserId = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    // Fetch all Hybrid packages for the user
+    const hybridPackages = await Package.find({
+      userId,
+      packageType: "Hybrid",
+    })
+      .sort({ startDate: -1 })
+      .select("packageType packageAmount startDate endDate status type createdAt");
+
+    // Calculate total investment in Hybrid packages
+    const totalHybridInvestment = hybridPackages.reduce(
+      (sum, pkg) => sum + pkg.packageAmount,
+      0
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Hybrid packages retrieved successfully",
+      count: hybridPackages.length,
+      totalInvestment: totalHybridInvestment,
+      data: hybridPackages.map((pkg) => ({
+        id: pkg._id,
+        type: pkg.packageType,
+        amount: pkg.packageAmount,
+        startDate: pkg.startDate,
+        endDate: pkg.endDate,
+        status: pkg.status,
+        purchaseType: pkg.type,
+        createdAt: pkg.createdAt,
+      })),
+    });
+  } catch (error) {
+    console.error("Error fetching Hybrid packages:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch Hybrid packages",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
