@@ -252,3 +252,54 @@ exports.getPackagesByUserId = async (req, res) => {
     });
   }
 };
+
+exports.getHybridPackageByUserId = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    // Fetch all Hybrid packages for the user
+    const hybridPackages = await Package.find({
+      userId,
+      packageType: "Hybrid",
+    })
+      .sort({ startDate: -1 })
+      .select("packageType packageAmount startDate endDate status type createdAt");
+
+    // Calculate total investment in Hybrid packages
+    const totalHybridInvestment = hybridPackages.reduce(
+      (sum, pkg) => sum + pkg.packageAmount,
+      0
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Hybrid packages retrieved successfully",
+      count: hybridPackages.length,
+      totalInvestment: totalHybridInvestment,
+      data: hybridPackages.map((pkg) => ({
+        id: pkg._id,
+        type: pkg.packageType,
+        amount: pkg.packageAmount,
+        startDate: pkg.startDate,
+        endDate: pkg.endDate,
+        status: pkg.status,
+        purchaseType: pkg.type,
+        createdAt: pkg.createdAt,
+      })),
+    });
+  } catch (error) {
+    console.error("Error fetching Hybrid packages:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch Hybrid packages",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
