@@ -158,7 +158,7 @@ exports.reTopUp = async (req, res) => {
 exports.createHybridPackage = async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { amount, txnId } = req.body;
+    const { packageAmount, txnId } = req.body;
 
     // Validate user exists
     const user = await User.findOne({ userId: userId });
@@ -170,7 +170,7 @@ exports.createHybridPackage = async (req, res) => {
     }
 
     // Validate amount (must be 10 USDT for hybrid packages)
-    if (!amount || amount !== 10) {
+    if (!packageAmount || packageAmount !== 10) {
       return res.status(400).json({
         success: false,
         message: "Hybrid package amount must be 10 USDT",
