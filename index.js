@@ -38,7 +38,10 @@ app.use('/api/transaction', require('./routes/transactionRoutes'));
 app.use('/api/withdraw', require('./routes/withdrawRoutes'));
 
 app.use('/api/autopool', require('./routes/autopoolRoutes'));
+
 app.use('/api/cgthomes', require('./routes/cgtHomesRoutes'));
+
+app.use('/api/hybrid-autopool', require('./routes/hybridAutopoolRoutes'));
 
 
 // Simple health check
