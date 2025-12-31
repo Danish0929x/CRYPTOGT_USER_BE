@@ -91,6 +91,8 @@ exports.updateUser = async (req, res) => {
       });
     }
 
+    const walletAddressChanged = newWalletAddress !== undefined && newWalletAddress !== walletAddress;
+
     return res.status(200).json({
       success: true,
       message: "Profile updated successfully",
@@ -101,7 +103,8 @@ exports.updateUser = async (req, res) => {
         phone: updatedUser.phone,
         walletAddress: updatedUser.walletAddress,
         parentId: updatedUser.parentId
-      }
+      },
+      requiresLogout: walletAddressChanged
     });
 
   } catch (error) {

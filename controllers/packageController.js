@@ -158,7 +158,7 @@ exports.reTopUp = async (req, res) => {
 exports.createHybridPackage = async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { packageAmount, txnId } = req.body;
+    const { txnId } = req.body;
 
     // Validate user exists
     const user = await User.findOne({ userId: userId });
@@ -169,15 +169,7 @@ exports.createHybridPackage = async (req, res) => {
       });
     }
 
-    // Validate amount (must be 10 USDT for hybrid packages)
-    if (!packageAmount || packageAmount !== 10) {
-      return res.status(400).json({
-        success: false,
-        message: "Hybrid package amount must be 10 USDT",
-      });
-    }
-
-    // Create new hybrid package
+    // Create new hybrid package with fixed amount of 10 USDT
     const newHybridPackage = new Package({
       userId,
       packageType: "Hybrid",
@@ -269,7 +261,7 @@ exports.getHybridPackageByUserId = async (req, res) => {
       userId,
       packageType: "Hybrid",
     })
-      .sort({ startDate: -1 })
+      .sort({ createdAt: -1 })
       .select("packageType packageAmount startDate endDate status type createdAt");
 
     // Calculate total investment in Hybrid packages
@@ -299,6 +291,81 @@ exports.getHybridPackageByUserId = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch Hybrid packages",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+exports.getDirectHybridPackages = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    // Get all users whose parentId is the current user
+    const directUsers = await User.find({ parentId: userId }).select("userId");
+    const directUserIds = directUsers.map((user) => user.userId);
+
+    // If no direct users, return empty array
+    if (directUserIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: "No direct hybrid packages found",
+        count: 0,
+        totalInvestment: 0,
+        data: [],
+      });
+    }
+
+    // Fetch all Hybrid packages for direct users
+    const directHybridPackages = await Package.find({
+      userId: { $in: directUserIds },
+      packageType: "Hybrid",
+    })
+      .sort({ createdAt: -1 })
+      .select("userId packageType packageAmount startDate endDate status type createdAt");
+
+    // Get user details for display
+    const userDetails = await User.find({ userId: { $in: directUserIds } }).select("userId name");
+    const userMap = {};
+    userDetails.forEach((user) => {
+      userMap[user.userId] = user.name;
+    });
+
+    // Calculate total investment in Direct Hybrid packages
+    const totalDirectHybridInvestment = directHybridPackages.reduce(
+      (sum, pkg) => sum + pkg.packageAmount,
+      0
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Direct hybrid packages retrieved successfully",
+      count: directHybridPackages.length,
+      totalInvestment: totalDirectHybridInvestment,
+      data: directHybridPackages.map((pkg) => ({
+        id: pkg._id,
+        userId: pkg.userId,
+        userName: userMap[pkg.userId] || "Unknown",
+        type: pkg.packageType,
+        amount: pkg.packageAmount,
+        startDate: pkg.startDate,
+        endDate: pkg.endDate,
+        status: pkg.status,
+        purchaseType: pkg.type,
+        createdAt: pkg.createdAt,
+      })),
+    });
+  } catch (error) {
+    console.error("Error fetching Direct Hybrid packages:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch Direct Hybrid packages",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
