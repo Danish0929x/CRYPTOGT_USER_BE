@@ -6,6 +6,7 @@ const {
 const User = require("../models/User");
 const Assets = require("../models/Assets");
 const { makeCryptoTransaction } = require("../utils/makeCryptoTransaction");
+const { makeCryptoTransaction: makeUSDTCryptoTransaction } = require("../utils/makeUSDTCryptoTransaction");
 const Package = require("../models/Packages");
 const axios = require("axios");
 require("dotenv").config();
@@ -338,26 +339,72 @@ const withdrawHybrid = async (req, res) => {
       });
     }
 
+    // Check user has a valid wallet address for direct USDT payout
+    if (!user.walletAddress || !/^0x[a-fA-F0-9]{40}$/.test(user.walletAddress)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid wallet address required for direct USDT withdrawal",
+      });
+    }
+
     // 4. Distribute amounts
     const realWalletAmount = 10;
     const retopupWalletAmount = 10;
     const cgtHomesAmount = 10;
     const cgtHomesCoinAmount = 900; // 10 × 90
+    const fromWalletAddress = "0x5C28b3979609eF43A2C4B73257d540cd29d9C1F0";
 
-    // Add 10 USDT to real wallet (USDTBalance)
-    const realWalletTx = await performWalletTransaction(
-      userId,
-      realWalletAmount,
-      "USDTBalance",
-      `Hybrid Package Withdrawal - Real Wallet (Package: ${packageId})`,
-      "Completed",
-      {
+    // Send 10 USDT directly to user's wallet address using makeUSDTCryptoTransaction
+    let realWalletTxHash = null;
+
+    try {
+      realWalletTxHash = await makeUSDTCryptoTransaction(realWalletAmount, user.walletAddress);
+      console.log(`Hybrid Withdrawal: Sent ${realWalletAmount} USDT to ${user.walletAddress}, txHash: ${realWalletTxHash}`);
+    } catch (cryptoError) {
+      console.error("Error sending USDT for Hybrid withdrawal:", cryptoError.message);
+      
+      // Create failed transaction record
+      const failedTx = new Transaction({
+        userId,
+        walletName: "USDTBalance",
+        creditedAmount: 0,
+        debitedAmount: 0,
+        transactionRemark: `Hybrid Package Withdrawal - Failed (Package: ${packageId})`,
+        status: "Failed",
+        fromAddress: fromWalletAddress,
+        toAddress: user.walletAddress,
         metadata: {
           packageId: packageId,
           withdrawalType: "HybridRealWallet",
+          error: cryptoError.message,
         },
-      }
-    );
+      });
+      await failedTx.save();
+
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send USDT to your wallet. Withdrawal cancelled.",
+        error: cryptoError.message,
+      });
+    }
+
+    // Create transaction record for real wallet USDT payout (only if successful)
+    const realWalletTx = new Transaction({
+      userId,
+      walletName: "USDTBalance",
+      creditedAmount: realWalletAmount,
+      debitedAmount: 0,
+      transactionRemark: `Hybrid Package Withdrawal - Real Wallet (Package: ${packageId})`,
+      status: "Completed",
+      txHash: realWalletTxHash,
+      fromAddress: fromWalletAddress,
+      toAddress: user.walletAddress,
+      metadata: {
+        packageId: packageId,
+        withdrawalType: "HybridRealWallet",
+      },
+    });
+    await realWalletTx.save();
 
     // Add 10 USDT to retopup wallet (autopoolBalance)
     const retopupWalletTx = await performWalletTransaction(
@@ -385,7 +432,6 @@ const withdrawHybrid = async (req, res) => {
           email: user.connectedCGTHomesEmail,
           amount: cgtHomesCoinAmount,
           transactionRemark: `Hybrid Package Withdrawal from CryptoGT - User: ${userId}, Package: ${packageId}`,
-          liveToken: cgtHomesAmount,
           status: "Success",
         }
       );
@@ -401,23 +447,23 @@ const withdrawHybrid = async (req, res) => {
       console.error("Error calling CGT Homes API:", apiError.message);
     }
 
-    // Create transaction record for CGT Homes transfer
-    const cgtHomesTx = await performWalletTransaction(
+    // Create transaction record for CGT Homes transfer (no wallet balance change, just record)
+    const cgtHomesTx = new Transaction({
       userId,
-      cgtHomesAmount,
-      "USDTBalance",
-      `Hybrid Package Withdrawal - CGT Homes Transfer (Package: ${packageId})`,
-      cgtHomesTransferSuccess ? "Completed" : "Failed",
-      {
-        metadata: {
-          packageId: packageId,
-          withdrawalType: "HybridCGTHomes",
-          cgtHomesCoinAmount: cgtHomesCoinAmount,
-          destinationEmail: user.connectedCGTHomesEmail,
-          error: cgtHomesError,
-        },
-      }
-    );
+      walletName: "USDTBalance",
+      creditedAmount: 0,
+      debitedAmount: 0,
+      transactionRemark: `Hybrid Package Withdrawal - CGT Homes Transfer (Package: ${packageId})`,
+      status: cgtHomesTransferSuccess ? "Completed" : "Failed",
+      metadata: {
+        packageId: packageId,
+        withdrawalType: "HybridCGTHomes",
+        cgtHomesCoinAmount: cgtHomesCoinAmount,
+        destinationEmail: user.connectedCGTHomesEmail,
+        error: cgtHomesError,
+      },
+    });
+    await cgtHomesTx.save();
 
     // 5. Update package status to Withdrawn
     package.status = "Inactive";
@@ -435,6 +481,8 @@ const withdrawHybrid = async (req, res) => {
             amount: realWalletAmount,
             transactionId: realWalletTx._id,
             status: "Completed",
+            txHash: realWalletTxHash,
+            toAddress: user.walletAddress,
           },
           retopupWallet: {
             amount: retopupWalletAmount,
