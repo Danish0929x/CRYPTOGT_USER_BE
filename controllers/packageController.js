@@ -1,4 +1,5 @@
 const Package = require("../models/Packages");
+const HybridPackage = require("../models/HybridPackage");
 const { distributeDirectBonus } = require("../functions/directDistributeBonus");
 const getLiveRate = require("../utils/liveRateUtils");
 const Wallet = require("../models/Wallet");
@@ -169,22 +170,46 @@ exports.createHybridPackage = async (req, res) => {
       });
     }
 
-    // Create new hybrid package with fixed amount of 10 USDT
-    const newHybridPackage = new Package({
+    // Calculate next position in binary tree
+    const totalPackages = await HybridPackage.countDocuments();
+    const newPosition = totalPackages + 1;
+
+    // Calculate parent position (binary tree logic)
+    let parentPackageId = null;
+    if (newPosition > 1) {
+      const parentPosition = Math.floor(newPosition / 2);
+      const parentPackage = await HybridPackage.findOne({ position: parentPosition });
+
+      if (parentPackage) {
+        parentPackageId = parentPackage._id;
+      }
+    }
+
+    // Create new hybrid package with fixed amount of 10 USDT using HybridPackage model
+    const newHybridPackage = new HybridPackage({
       userId,
-      packageType: "Hybrid",
-      packageAmount: 10,
-      cgtCoin: 0,
+      position: newPosition,
+      parentPackageId,
       txnId: txnId || null,
-      poi: 0,
-      directBonus: false,
-      productVoucher: false,
-      type: "BuyHybrid",
-      startDate: new Date(),
       status: "Active",
     });
 
     await newHybridPackage.save();
+
+    // Update parent's left or right child reference
+    if (parentPackageId) {
+      const parentPackage = await HybridPackage.findById(parentPackageId);
+
+      if (newPosition % 2 === 0) {
+        // Even position = left child
+        parentPackage.leftChildId = newHybridPackage._id;
+      } else {
+        // Odd position = right child
+        parentPackage.rightChildId = newHybridPackage._id;
+      }
+
+      await parentPackage.save();
+    }
 
     res.status(201).json({
       success: true,
@@ -256,10 +281,9 @@ exports.getHybridPackageByUserId = async (req, res) => {
       });
     }
 
-    // Fetch all Hybrid packages for the user
-    const hybridPackages = await Package.find({
+    // Fetch all Hybrid packages for the user using HybridPackage model
+    const hybridPackages = await HybridPackage.find({
       userId,
-      packageType: "Hybrid",
     })
       .sort({ createdAt: -1 })
       .select("packageType packageAmount startDate endDate status type createdAt");
@@ -322,10 +346,9 @@ exports.getDirectHybridPackages = async (req, res) => {
       });
     }
 
-    // Fetch all Hybrid packages for direct users
-    const directHybridPackages = await Package.find({
+    // Fetch all Hybrid packages for direct users using HybridPackage model
+    const directHybridPackages = await HybridPackage.find({
       userId: { $in: directUserIds },
-      packageType: "Hybrid",
     })
       .sort({ createdAt: -1 })
       .select("userId packageType packageAmount startDate endDate status type createdAt");
@@ -366,6 +389,63 @@ exports.getDirectHybridPackages = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch Direct Hybrid packages",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+exports.getHybridAutopoolTree = async (req, res) => {
+  try {
+    // Find the root package (position 1) - the starting point of the entire autopool tree
+    const rootPackage = await HybridPackage.findOne({
+      position: 1,
+    }).select("userId position parentPackageId leftChildId rightChildId createdAt");
+
+    if (!rootPackage) {
+      return res.status(404).json({
+        success: false,
+        message: "No hybrid autopool tree found",
+        data: null,
+      });
+    }
+
+    // Recursive function to build the tree with user details
+    const buildTree = async (packageId) => {
+      if (!packageId) return null;
+
+      const pkg = await HybridPackage.findById(packageId)
+        .select("userId position parentPackageId leftChildId rightChildId createdAt")
+        .lean();
+
+      if (!pkg) return null;
+
+      // Get user details
+      const user = await User.findOne({ userId: pkg.userId }).select("userId name email").lean();
+
+      return {
+        id: pkg._id,
+        userId: pkg.userId,
+        userName: user?.name || "Unknown",
+        userEmail: user?.email || "N/A",
+        position: pkg.position,
+        createdAt: pkg.createdAt,
+        leftChild: await buildTree(pkg.leftChildId),
+        rightChild: await buildTree(pkg.rightChildId),
+      };
+    };
+
+    const tree = await buildTree(rootPackage._id);
+
+    res.status(200).json({
+      success: true,
+      message: "Hybrid autopool tree retrieved successfully",
+      data: tree,
+    });
+  } catch (error) {
+    console.error("Error fetching Hybrid Autopool tree:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch Hybrid Autopool tree",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }

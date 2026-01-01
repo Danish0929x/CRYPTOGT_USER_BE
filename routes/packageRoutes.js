@@ -9,5 +9,6 @@ router.post('/create-hybrid-package', authMiddleware, packageController.createHy
 router.get('/getPackagesByUserId', authMiddleware, packageController.getPackagesByUserId);
 router.get('/get-hybrid-packages', authMiddleware, packageController.getHybridPackageByUserId);
 router.get('/get-direct-hybrid-packages', authMiddleware, packageController.getDirectHybridPackages);
+router.get('/get-hybrid-autopool-tree', authMiddleware, packageController.getHybridAutopoolTree);
 
 module.exports = router;

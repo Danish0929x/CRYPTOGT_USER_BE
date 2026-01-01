@@ -41,8 +41,6 @@ app.use('/api/autopool', require('./routes/autopoolRoutes'));
 
 app.use('/api/cgthomes', require('./routes/cgtHomesRoutes'));
 
-app.use('/api/hybrid-autopool', require('./routes/hybridAutopoolRoutes'));
-
 
 // Simple health check
 app.get('/', (req, res) => {
