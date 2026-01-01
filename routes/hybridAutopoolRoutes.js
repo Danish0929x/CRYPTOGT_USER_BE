@@ -2,10 +2,10 @@
 const express = require("express");
 const router = express.Router();
 const hybridAutopoolController = require("../controllers/hybridAutopoolController");
-const { isAuthenticated } = require("../middlewares/authMiddleware");
+const authMiddleware = require("../middlewares/authMiddleware");
 
 // All routes require authentication
-router.use(isAuthenticated);
+router.use(authMiddleware);
 
 // Join Hybrid Autopool
 router.post("/join", hybridAutopoolController.joinHybridAutopool);
