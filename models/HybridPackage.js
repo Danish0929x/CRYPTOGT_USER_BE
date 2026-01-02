@@ -46,6 +46,31 @@ const hybridPackageSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    levels: [
+      {
+        level: {
+          type: Number,
+          required: true,
+        },
+        status: {
+          type: String,
+          enum: ["Pending", "Achieved", "Claimed"],
+          default: "Pending",
+        },
+        rewardAmount: {
+          type: Number,
+          default: 0,
+        },
+        achievedAt: {
+          type: Date,
+          default: null,
+        },
+        claimedAt: {
+          type: Date,
+          default: null,
+        },
+      },
+    ],
     createdAt: {
       type: Date,
       default: Date.now,

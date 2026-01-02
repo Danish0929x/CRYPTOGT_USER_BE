@@ -7,6 +7,120 @@ const { performWalletTransaction } = require("../utils/performWalletTransaction"
 const { handleDirectMembers } = require("../functions/checkProductVoucher");
 const User = require("../models/User");
 
+// Level Configuration based on International AutoPool
+const LEVEL_CONFIG = {
+  1: { members: 2, percentage: 5, amount: 20 },
+  2: { members: 4, percentage: 5, amount: 40 },
+  3: { members: 8, percentage: 5, amount: 80 },
+  4: { members: 16, percentage: 5, amount: 160 },
+  5: { members: 32, percentage: 5, amount: 320 },
+  6: { members: 64, percentage: 5, amount: 640 },
+  7: { members: 128, percentage: 5, amount: 1280 },
+  8: { members: 256, percentage: 5, amount: 2560 },
+  9: { members: 512, percentage: 5, amount: 5120 },
+  10: { members: 1024, percentage: 5, amount: 10240 },
+  11: { members: 2048, percentage: 3, amount: 20460 },
+  12: { members: 4096, percentage: 3, amount: 40960 },
+  13: { members: 8192, percentage: 3, amount: 81920 },
+  14: { members: 16384, percentage: 3, amount: 163840 },
+  15: { members: 32768, percentage: 3, amount: 327680 },
+};
+
+// Helper function to count total members under a user in the tree
+const countTreeMembers = async (packageId) => {
+  if (!packageId) return 0;
+
+  const pkg = await HybridPackage.findById(packageId).select(
+    "leftChildId rightChildId"
+  );
+
+  if (!pkg) return 0;
+
+  let count = 0;
+  if (pkg.leftChildId) count += 1 + (await countTreeMembers(pkg.leftChildId));
+  if (pkg.rightChildId) count += 1 + (await countTreeMembers(pkg.rightChildId));
+
+  return count;
+};
+
+// Count members at each depth level (how many members in each row of binary tree)
+const countMembersByDepth = async (packageId, maxDepth = 15) => {
+  const depthCounts = {};
+
+  const traverse = async (pkgId, depth) => {
+    if (!pkgId || depth > maxDepth) return;
+
+    if (!depthCounts[depth]) {
+      depthCounts[depth] = 0;
+    }
+    depthCounts[depth]++;
+
+    const pkg = await HybridPackage.findById(pkgId).select("leftChildId rightChildId");
+    if (!pkg) return;
+
+    if (pkg.leftChildId) {
+      await traverse(pkg.leftChildId, depth + 1);
+    }
+    if (pkg.rightChildId) {
+      await traverse(pkg.rightChildId, depth + 1);
+    }
+  };
+
+  await traverse(packageId, 1);
+  return depthCounts;
+};
+
+// Helper function to check and update user levels
+const updateUserLevels = async (packageId) => {
+  try {
+    const pkg = await HybridPackage.findById(packageId);
+    if (!pkg) return;
+
+    const totalMembers = await countTreeMembers(packageId);
+
+    // Determine which levels are achieved
+    const achievedLevels = Object.keys(LEVEL_CONFIG).filter(
+      (level) => totalMembers >= LEVEL_CONFIG[level].members
+    );
+
+    // Update levels array
+    if (!pkg.levels) {
+      pkg.levels = [];
+    }
+
+    // Initialize all levels (starting from 0)
+    for (let level = 0; level <= 15; level++) {
+      const existingLevel = pkg.levels.find((l) => l.level === level);
+
+      if (achievedLevels.includes(level.toString())) {
+        if (!existingLevel) {
+          pkg.levels.push({
+            level,
+            status: "Achieved",
+            rewardAmount: LEVEL_CONFIG[level] ? LEVEL_CONFIG[level].amount : 0,
+            achievedAt: new Date(),
+          });
+        } else if (existingLevel.status === "Pending") {
+          existingLevel.status = "Achieved";
+          existingLevel.achievedAt = new Date();
+        }
+      } else {
+        if (!existingLevel) {
+          pkg.levels.push({
+            level,
+            status: "Pending",
+            rewardAmount: LEVEL_CONFIG[level] ? LEVEL_CONFIG[level].amount : 0,
+          });
+        }
+      }
+    }
+
+    await pkg.save();
+  } catch (error) {
+    console.error("Error updating user levels:", error);
+  }
+};
+
 
 exports.createPackage = async (req, res) => {
   try {
@@ -170,6 +284,15 @@ exports.createHybridPackage = async (req, res) => {
       });
     }
 
+    // Check if user already has a hybrid package
+    const existingHybridPackage = await HybridPackage.findOne({ userId });
+    if (existingHybridPackage) {
+      return res.status(400).json({
+        success: false,
+        message: "User can only have one hybrid package",
+      });
+    }
+
     // Calculate next position in binary tree
     const totalPackages = await HybridPackage.countDocuments();
     const newPosition = totalPackages + 1;
@@ -286,13 +409,10 @@ exports.getHybridPackageByUserId = async (req, res) => {
       userId,
     })
       .sort({ createdAt: -1 })
-      .select("packageType packageAmount startDate endDate status type createdAt");
+      .select("status createdAt");
 
-    // Calculate total investment in Hybrid packages
-    const totalHybridInvestment = hybridPackages.reduce(
-      (sum, pkg) => sum + pkg.packageAmount,
-      0
-    );
+    // Calculate total investment in Hybrid packages (fixed 10 USDT per package)
+    const totalHybridInvestment = hybridPackages.length * 10;
 
     res.status(200).json({
       success: true,
@@ -301,12 +421,9 @@ exports.getHybridPackageByUserId = async (req, res) => {
       totalInvestment: totalHybridInvestment,
       data: hybridPackages.map((pkg) => ({
         id: pkg._id,
-        type: pkg.packageType,
-        amount: pkg.packageAmount,
-        startDate: pkg.startDate,
-        endDate: pkg.endDate,
+        amount: 10,
+        type: "Hybrid",
         status: pkg.status,
-        purchaseType: pkg.type,
         createdAt: pkg.createdAt,
       })),
     });
@@ -351,7 +468,7 @@ exports.getDirectHybridPackages = async (req, res) => {
       userId: { $in: directUserIds },
     })
       .sort({ createdAt: -1 })
-      .select("userId packageType packageAmount startDate endDate status type createdAt");
+      .select("userId status createdAt");
 
     // Get user details for display
     const userDetails = await User.find({ userId: { $in: directUserIds } }).select("userId name");
@@ -360,11 +477,8 @@ exports.getDirectHybridPackages = async (req, res) => {
       userMap[user.userId] = user.name;
     });
 
-    // Calculate total investment in Direct Hybrid packages
-    const totalDirectHybridInvestment = directHybridPackages.reduce(
-      (sum, pkg) => sum + pkg.packageAmount,
-      0
-    );
+    // Calculate total investment in Direct Hybrid packages (fixed 10 USDT per package)
+    const totalDirectHybridInvestment = directHybridPackages.length * 10;
 
     res.status(200).json({
       success: true,
@@ -373,14 +487,9 @@ exports.getDirectHybridPackages = async (req, res) => {
       totalInvestment: totalDirectHybridInvestment,
       data: directHybridPackages.map((pkg) => ({
         id: pkg._id,
-        userId: pkg.userId,
-        userName: userMap[pkg.userId] || "Unknown",
-        type: pkg.packageType,
-        amount: pkg.packageAmount,
-        startDate: pkg.startDate,
-        endDate: pkg.endDate,
+        amount: 10,
+        type: "Hybrid",
         status: pkg.status,
-        purchaseType: pkg.type,
         createdAt: pkg.createdAt,
       })),
     });
@@ -396,21 +505,30 @@ exports.getDirectHybridPackages = async (req, res) => {
 
 exports.getHybridAutopoolTree = async (req, res) => {
   try {
-    // Find the root package (position 1) - the starting point of the entire autopool tree
-    const rootPackage = await HybridPackage.findOne({
-      position: 1,
-    }).select("userId position parentPackageId leftChildId rightChildId createdAt");
+    const userId = req.user.userId;
 
-    if (!rootPackage) {
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    // Get the current user's hybrid package
+    const userPackage = await HybridPackage.findOne({ userId }).select(
+      "userId position parentPackageId leftChildId rightChildId createdAt"
+    );
+
+    if (!userPackage) {
       return res.status(404).json({
         success: false,
-        message: "No hybrid autopool tree found",
+        message: "User hybrid package not found",
         data: null,
       });
     }
 
     // Recursive function to build the tree with user details
-    const buildTree = async (packageId) => {
+    const buildTree = async (packageId, currentUserId) => {
       if (!packageId) return null;
 
       const pkg = await HybridPackage.findById(packageId)
@@ -419,22 +537,19 @@ exports.getHybridAutopoolTree = async (req, res) => {
 
       if (!pkg) return null;
 
-      // Get user details
-      const user = await User.findOne({ userId: pkg.userId }).select("userId name email").lean();
-
       return {
         id: pkg._id,
         userId: pkg.userId,
-        userName: user?.name || "Unknown",
-        userEmail: user?.email || "N/A",
         position: pkg.position,
+        isCurrentUser: pkg.userId === currentUserId,
         createdAt: pkg.createdAt,
-        leftChild: await buildTree(pkg.leftChildId),
-        rightChild: await buildTree(pkg.rightChildId),
+        leftChild: await buildTree(pkg.leftChildId, currentUserId),
+        rightChild: await buildTree(pkg.rightChildId, currentUserId),
       };
     };
 
-    const tree = await buildTree(rootPackage._id);
+    // Build tree starting from current user's package
+    const tree = await buildTree(userPackage._id, userId);
 
     res.status(200).json({
       success: true,
@@ -446,6 +561,128 @@ exports.getHybridAutopoolTree = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch Hybrid Autopool tree",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+exports.getUserLevels = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    // Get user's hybrid package
+    const hybridPackage = await HybridPackage.findOne({ userId });
+
+    if (!hybridPackage) {
+      return res.status(404).json({
+        success: false,
+        message: "Hybrid package not found",
+      });
+    }
+
+    // Update levels before returning (check if new levels are achieved)
+    await updateUserLevels(hybridPackage._id);
+
+    // Fetch updated package
+    const updatedPackage = await HybridPackage.findOne({ userId });
+
+    // Count members at each depth level (each row of binary tree)
+    const depthCounts = await countMembersByDepth(hybridPackage._id);
+
+    // Enrich levels with current member count
+    // Each level shows members at the NEXT depth level
+    // Level 1 needs 2 members = members at depth 2
+    // Level 2 needs 4 members = members at depth 2 + 3 (cumulative)
+    // Level 3 needs 8 members = members at depth 2 + 3 + 4 (cumulative), etc.
+    const enrichedLevels = (updatedPackage.levels || []).map((level) => {
+      let currentMembers = 0;
+      // For each level, sum members from depth 2 to level+1 (the children that fill this level)
+      for (let d = 2; d <= level.level + 1; d++) {
+        currentMembers += depthCounts[d] || 0;
+      }
+      return {
+        ...level.toObject ? level.toObject() : level,
+        currentMembers: currentMembers,
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "User levels retrieved successfully",
+      data: enrichedLevels,
+    });
+  } catch (error) {
+    console.error("Error fetching user levels:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch user levels",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+exports.claimLevelReward = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { level } = req.body;
+
+    if (!userId || !level) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID and level are required",
+      });
+    }
+
+    // Get user's hybrid package
+    const hybridPackage = await HybridPackage.findOne({ userId });
+
+    if (!hybridPackage) {
+      return res.status(404).json({
+        success: false,
+        message: "Hybrid package not found",
+      });
+    }
+
+    // Find the level
+    const userLevel = hybridPackage.levels.find((l) => l.level === level);
+
+    if (!userLevel) {
+      return res.status(400).json({
+        success: false,
+        message: "Level not found",
+      });
+    }
+
+    if (userLevel.status !== "Achieved") {
+      return res.status(400).json({
+        success: false,
+        message: "Level is not achieved yet or reward already claimed",
+      });
+    }
+
+    // Mark as claimed
+    userLevel.status = "Claimed";
+    userLevel.claimedAt = new Date();
+
+    await hybridPackage.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Reward claimed successfully",
+      rewardAmount: userLevel.rewardAmount,
+    });
+  } catch (error) {
+    console.error("Error claiming reward:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to claim reward",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }

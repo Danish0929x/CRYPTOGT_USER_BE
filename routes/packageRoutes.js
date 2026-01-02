@@ -10,5 +10,7 @@ router.get('/getPackagesByUserId', authMiddleware, packageController.getPackages
 router.get('/get-hybrid-packages', authMiddleware, packageController.getHybridPackageByUserId);
 router.get('/get-direct-hybrid-packages', authMiddleware, packageController.getDirectHybridPackages);
 router.get('/get-hybrid-autopool-tree', authMiddleware, packageController.getHybridAutopoolTree);
+router.get('/get-user-levels', authMiddleware, packageController.getUserLevels);
+router.post('/claim-level-reward', authMiddleware, packageController.claimLevelReward);
 
 module.exports = router;
