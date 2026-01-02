@@ -520,9 +520,9 @@ exports.getHybridAutopoolTree = async (req, res) => {
     );
 
     if (!userPackage) {
-      return res.status(404).json({
-        success: false,
-        message: "User hybrid package not found",
+      return res.status(200).json({
+        success: true,
+        message: "No hybrid package found",
         data: null,
       });
     }
@@ -581,9 +581,10 @@ exports.getUserLevels = async (req, res) => {
     const hybridPackage = await HybridPackage.findOne({ userId });
 
     if (!hybridPackage) {
-      return res.status(404).json({
-        success: false,
-        message: "Hybrid package not found",
+      return res.status(200).json({
+        success: true,
+        message: "No hybrid package found",
+        data: [],
       });
     }
 
