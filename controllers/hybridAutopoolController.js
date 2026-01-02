@@ -173,6 +173,9 @@ const hybridAutopoolController = {
   },
 
   // Get user's hybrid autopool history
+  // If `position` query param is provided, returns history for that position's subtree.
+  // Otherwise, will try to return history for the current user's position (their subtree).
+  // Falls back to items owned by the user if the user has no HybridAutopool entry.
   async getHybridAutopoolHistory(req, res) {
     try {
       const userId = req.user.userId;
@@ -180,6 +183,56 @@ const hybridAutopoolController = {
       const limit = parseInt(req.query.limit) || 10;
       const skip = (page - 1) * limit;
 
+      // Determine starting position: optional ?position=123, or current user's position
+      let startPosition = null;
+      if (req.query.position) {
+        startPosition = parseInt(req.query.position);
+      } else {
+        const myNode = await HybridAutopool.findOne({ userId }).lean();
+        if (myNode && myNode.position) {
+          startPosition = myNode.position;
+        }
+      }
+
+      // If we have a startPosition, gather all descendant positions (BFS)
+      if (startPosition) {
+        const positions = [];
+        const queue = [startPosition];
+
+        while (queue.length > 0) {
+          const pos = queue.shift();
+          positions.push(pos);
+
+          const node = await HybridAutopool.findOne({ position: pos }).lean();
+          if (!node) continue;
+
+          if (node.leftChildPosition) queue.push(node.leftChildPosition);
+          if (node.rightChildPosition) queue.push(node.rightChildPosition);
+        }
+
+        const total = await HybridAutopool.countDocuments({ position: { $in: positions } });
+        const entries = await HybridAutopool.find({ position: { $in: positions } })
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean();
+
+        return res.status(200).json({
+          success: true,
+          data: {
+            entries: entries,
+            pagination: {
+              currentPage: page,
+              totalPages: Math.ceil(total / limit),
+              totalRecords: total,
+              hasNext: page < Math.ceil(total / limit),
+              hasPrev: page > 1,
+            },
+          },
+        });
+      }
+
+      // Fallback: no position found and user has no node — return entries owned by userId
       const entries = await HybridAutopool.find({ userId })
         .sort({ createdAt: -1 })
         .skip(skip)
