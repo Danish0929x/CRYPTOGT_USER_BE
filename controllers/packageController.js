@@ -404,7 +404,7 @@ exports.getHybridPackageByUserId = async (req, res) => {
       userId,
     })
       .sort({ createdAt: -1 })
-      .select("status createdAt");
+      .select("status createdAt levels");
 
     // Calculate total investment in Hybrid packages (fixed 10 USDT per package)
     const totalHybridInvestment = hybridPackages.length * 10;
@@ -420,6 +420,7 @@ exports.getHybridPackageByUserId = async (req, res) => {
         type: "Hybrid",
         status: pkg.status,
         createdAt: pkg.createdAt,
+        levels: pkg.levels || [],
       })),
     });
   } catch (error) {
