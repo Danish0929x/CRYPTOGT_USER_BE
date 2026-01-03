@@ -517,7 +517,7 @@ exports.getHybridAutopoolTree = async (req, res) => {
     // Get the current user's hybrid package
     const userPackage = await HybridPackage.findOne({ userId }).select(
       "userId position parentPackageId leftChildId rightChildId createdAt"
-    );
+    ).lean();
 
     if (!userPackage) {
       return res.status(200).json({
@@ -527,14 +527,56 @@ exports.getHybridAutopoolTree = async (req, res) => {
       });
     }
 
-    // Recursive function to build the tree with user details
-    const buildTree = async (packageId, currentUserId) => {
+    // Collect all package IDs in the tree starting from user's package
+    const collectPackageIds = (pkg, ids = new Set()) => {
+      if (!pkg) return ids;
+      ids.add(pkg._id.toString());
+      if (pkg.leftChildId) ids.add(pkg.leftChildId.toString());
+      if (pkg.rightChildId) ids.add(pkg.rightChildId.toString());
+      return ids;
+    };
+
+    // Start with user's package IDs
+    let packageIds = new Set([userPackage._id.toString()]);
+    if (userPackage.leftChildId) packageIds.add(userPackage.leftChildId.toString());
+    if (userPackage.rightChildId) packageIds.add(userPackage.rightChildId.toString());
+
+    // Fetch all descendants in batches (limit depth to prevent infinite loops)
+    let allPackages = new Map();
+    let currentIds = Array.from(packageIds);
+    let depth = 0;
+    const maxDepth = 15; // Reasonable depth limit
+
+    while (currentIds.length > 0 && depth < maxDepth) {
+      const packages = await HybridPackage.find({
+        _id: { $in: currentIds }
+      })
+      .select("userId position parentPackageId leftChildId rightChildId createdAt")
+      .lean();
+
+      const nextLevelIds = new Set();
+      
+      packages.forEach(pkg => {
+        allPackages.set(pkg._id.toString(), pkg);
+        if (pkg.leftChildId && !allPackages.has(pkg.leftChildId.toString())) {
+          nextLevelIds.add(pkg.leftChildId.toString());
+        }
+        if (pkg.rightChildId && !allPackages.has(pkg.rightChildId.toString())) {
+          nextLevelIds.add(pkg.rightChildId.toString());
+        }
+      });
+
+      currentIds = Array.from(nextLevelIds);
+      depth++;
+    }
+
+    // Build tree from cached packages (non-recursive)
+    const buildTree = (packageId, currentUserId) => {
       if (!packageId) return null;
-
-      const pkg = await HybridPackage.findById(packageId)
-        .select("userId position parentPackageId leftChildId rightChildId createdAt")
-        .lean();
-
+      
+      const pkgIdStr = packageId.toString();
+      const pkg = allPackages.get(pkgIdStr);
+      
       if (!pkg) return null;
 
       return {
@@ -543,13 +585,13 @@ exports.getHybridAutopoolTree = async (req, res) => {
         position: pkg.position,
         isCurrentUser: pkg.userId === currentUserId,
         createdAt: pkg.createdAt,
-        leftChild: await buildTree(pkg.leftChildId, currentUserId),
-        rightChild: await buildTree(pkg.rightChildId, currentUserId),
+        leftChild: buildTree(pkg.leftChildId, currentUserId),
+        rightChild: buildTree(pkg.rightChildId, currentUserId),
       };
     };
 
     // Build tree starting from current user's package
-    const tree = await buildTree(userPackage._id, userId);
+    const tree = buildTree(userPackage._id, userId);
 
     res.status(200).json({
       success: true,
@@ -561,69 +603,6 @@ exports.getHybridAutopoolTree = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch Hybrid Autopool tree",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
-exports.getUserLevels = async (req, res) => {
-  try {
-    const userId = req.user.userId;
-
-    if (!userId) {
-      return res.status(400).json({
-        success: false,
-        message: "User ID is required",
-      });
-    }
-
-    // Get user's hybrid package
-    const hybridPackage = await HybridPackage.findOne({ userId });
-
-    if (!hybridPackage) {
-      return res.status(200).json({
-        success: true,
-        message: "No hybrid package found",
-        data: [],
-      });
-    }
-
-    // Update levels before returning (check if new levels are achieved)
-    await updateUserLevels(hybridPackage._id);
-
-    // Fetch updated package
-    const updatedPackage = await HybridPackage.findOne({ userId });
-
-    // Count members at each depth level (each row of binary tree)
-    const depthCounts = await countMembersByDepth(hybridPackage._id);
-
-    // Enrich levels with current member count
-    // Each level shows members at the NEXT depth level
-    // Level 1 needs 2 members = members at depth 2
-    // Level 2 needs 4 members = members at depth 2 + 3 (cumulative)
-    // Level 3 needs 8 members = members at depth 2 + 3 + 4 (cumulative), etc.
-    const enrichedLevels = (updatedPackage.levels || []).map((level) => {
-      let currentMembers = 0;
-      // For each level, sum members from depth 2 to level+1 (the children that fill this level)
-      for (let d = 2; d <= level.level + 1; d++) {
-        currentMembers += depthCounts[d] || 0;
-      }
-      return {
-        ...level.toObject ? level.toObject() : level,
-        currentMembers: currentMembers,
-      };
-    });
-
-    res.status(200).json({
-      success: true,
-      message: "User levels retrieved successfully",
-      data: enrichedLevels,
-    });
-  } catch (error) {
-    console.error("Error fetching user levels:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch user levels",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
