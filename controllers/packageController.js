@@ -6,6 +6,7 @@ const Wallet = require("../models/Wallet");
 const { performWalletTransaction } = require("../utils/performWalletTransaction");
 const { handleDirectMembers } = require("../functions/checkProductVoucher");
 const User = require("../models/User");
+const { makeCryptoTransaction } = require("../utils/makeUSDTCryptoTransaction");
 
 // Level Configuration based on International AutoPool
 const LEVEL_CONFIG = {
@@ -43,82 +44,76 @@ const countTreeMembers = async (packageId) => {
   return count;
 };
 
-// Count members at each depth level (how many members in each row of binary tree)
+// Optimized function to count members at each depth level (batch fetching like getHybridAutopoolTree)
 const countMembersByDepth = async (packageId, maxDepth = 15) => {
+  if (!packageId) return {};
+
+  const userPackage = await HybridPackage.findById(packageId).select(
+    "leftChildId rightChildId"
+  ).lean();
+
+  if (!userPackage) return {};
+
+  // Start with user's package IDs
+  let packageIds = new Set([packageId.toString()]);
+  if (userPackage.leftChildId) packageIds.add(userPackage.leftChildId.toString());
+  if (userPackage.rightChildId) packageIds.add(userPackage.rightChildId.toString());
+
+  // Fetch all descendants in batches
+  let allPackages = new Map();
+  let currentIds = Array.from(packageIds);
+  let depth = 0;
+
+  while (currentIds.length > 0 && depth < maxDepth) {
+    const packages = await HybridPackage.find({
+      _id: { $in: currentIds }
+    })
+    .select("leftChildId rightChildId")
+    .lean();
+
+    const nextLevelIds = new Set();
+    
+    packages.forEach(pkg => {
+      allPackages.set(pkg._id.toString(), pkg);
+      if (pkg.leftChildId && !allPackages.has(pkg.leftChildId.toString())) {
+        nextLevelIds.add(pkg.leftChildId.toString());
+      }
+      if (pkg.rightChildId && !allPackages.has(pkg.rightChildId.toString())) {
+        nextLevelIds.add(pkg.rightChildId.toString());
+      }
+    });
+
+    currentIds = Array.from(nextLevelIds);
+    depth++;
+  }
+
+  // Count members at each depth level using the cached data
   const depthCounts = {};
-
-  const traverse = async (pkgId, depth) => {
-    if (!pkgId || depth > maxDepth) return;
-
-    if (!depthCounts[depth]) {
-      depthCounts[depth] = 0;
+  
+  const countAtDepth = (pkgId, currentDepth) => {
+    if (!pkgId || currentDepth > maxDepth) return;
+    
+    if (!depthCounts[currentDepth]) {
+      depthCounts[currentDepth] = 0;
     }
-    depthCounts[depth]++;
-
-    const pkg = await HybridPackage.findById(pkgId).select("leftChildId rightChildId");
+    depthCounts[currentDepth]++;
+    
+    const pkgIdStr = pkgId.toString();
+    const pkg = allPackages.get(pkgIdStr);
+    
     if (!pkg) return;
-
+    
     if (pkg.leftChildId) {
-      await traverse(pkg.leftChildId, depth + 1);
+      countAtDepth(pkg.leftChildId, currentDepth + 1);
     }
     if (pkg.rightChildId) {
-      await traverse(pkg.rightChildId, depth + 1);
+      countAtDepth(pkg.rightChildId, currentDepth + 1);
     }
   };
 
-  await traverse(packageId, 1);
+  countAtDepth(packageId, 1);
+  
   return depthCounts;
-};
-
-// Helper function to check and update user levels
-const updateUserLevels = async (packageId) => {
-  try {
-    const pkg = await HybridPackage.findById(packageId);
-    if (!pkg) return;
-
-    const totalMembers = await countTreeMembers(packageId);
-
-    // Determine which levels are achieved
-    const achievedLevels = Object.keys(LEVEL_CONFIG).filter(
-      (level) => totalMembers >= LEVEL_CONFIG[level].members
-    );
-
-    // Update levels array
-    if (!pkg.levels) {
-      pkg.levels = [];
-    }
-
-    // Initialize all levels (starting from 0)
-    for (let level = 0; level <= 15; level++) {
-      const existingLevel = pkg.levels.find((l) => l.level === level);
-
-      if (achievedLevels.includes(level.toString())) {
-        if (!existingLevel) {
-          pkg.levels.push({
-            level,
-            status: "Achieved",
-            rewardAmount: LEVEL_CONFIG[level] ? LEVEL_CONFIG[level].amount : 0,
-            achievedAt: new Date(),
-          });
-        } else if (existingLevel.status === "Pending") {
-          existingLevel.status = "Achieved";
-          existingLevel.achievedAt = new Date();
-        }
-      } else {
-        if (!existingLevel) {
-          pkg.levels.push({
-            level,
-            status: "Pending",
-            rewardAmount: LEVEL_CONFIG[level] ? LEVEL_CONFIG[level].amount : 0,
-          });
-        }
-      }
-    }
-
-    await pkg.save();
-  } catch (error) {
-    console.error("Error updating user levels:", error);
-  }
 };
 
 
@@ -620,6 +615,26 @@ exports.claimLevelReward = async (req, res) => {
       });
     }
 
+    // Validate level exists in configuration
+    if (!LEVEL_CONFIG[level]) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid level",
+      });
+    }
+
+    // Check if level is currently available for claiming
+    if (level > 4) {
+      return res.status(200).json({
+        success: false,
+        message: "Rewards for Level 5 and above are coming soon. Stay tuned!",
+        data: {
+          level: level,
+          maxAvailableLevel: 4,
+        },
+      });
+    }
+
     // Get user's hybrid package
     const hybridPackage = await HybridPackage.findOne({ userId });
 
@@ -630,33 +645,118 @@ exports.claimLevelReward = async (req, res) => {
       });
     }
 
-    // Find the level
+    // Get level configuration
+    const levelConfig = LEVEL_CONFIG[level];
+    const requiredMembers = levelConfig.members;
+    const rewardAmount = levelConfig.amount * (levelConfig.percentage / 100);
+
+    // console.log("\n========== LEVEL REWARD CLAIM VERIFICATION ==========");
+    // console.log(`User ID: ${userId}`);
+    // console.log(`Requested Level: ${level}`);
+    // console.log(`Required Members for Level ${level}: ${requiredMembers}`);
+    // console.log(`Reward Amount: $${rewardAmount}`);
+
+    // Count actual members in user's tree at this level
+    const actualMembers = await countMembersByDepth(hybridPackage._id, level + 1);
+    const membersAtLevel = actualMembers[level + 1] || 0;
+
+    // console.log(`Actual Members at Level ${level}: ${membersAtLevel}`);
+    // console.log(`Verification: ${membersAtLevel >= requiredMembers ? "✓ PASSED" : "✗ FAILED"}`);
+    // console.log("=====================================================\n");
+
+    // Verify user has reached the level
+    if (membersAtLevel < requiredMembers) {
+      return res.status(200).json({
+        success: false,
+        message: `Level not achieved. You have ${membersAtLevel} members but need ${requiredMembers} members at level ${level}`,
+        data: {
+          currentMembers: membersAtLevel,
+          requiredMembers: requiredMembers,
+          level: level,
+        },
+      });
+    }
+
+    // Check if already claimed
     const userLevel = hybridPackage.levels.find((l) => l.level === level);
-
-    if (!userLevel) {
-      return res.status(400).json({
+    if (userLevel && userLevel.status === "Claimed") {
+      return res.status(200).json({
         success: false,
-        message: "Level not found",
+        message: "Reward already claimed for this level",
       });
     }
 
-    if (userLevel.status !== "Achieved") {
-      return res.status(400).json({
+    // console.log(`✓ VERIFIED: User ${userId} is eligible to claim level ${level} reward`);
+    // console.log(`Next step: Distribute $${rewardAmount} to user wallet`);
+
+    // Get user's wallet
+    const userWallet = await User.findOne({ userId });
+    if (!userWallet) {
+      return res.status(404).json({
         success: false,
-        message: "Level is not achieved yet or reward already claimed",
+        message: "User not found",
       });
     }
 
-    // Mark as claimed
-    userLevel.status = "Claimed";
-    userLevel.claimedAt = new Date();
+    if (!userWallet.walletAddress) {
+      return res.status(400).json({
+        success: false,
+        message: "User wallet address not found",
+      });
+    }
 
+    // Distribute reward to user's USDT wallet via blockchain transaction
+    // console.log(`\n🚀 Initiating blockchain transaction...`);
+    // console.log(`Amount: ${rewardAmount} USDT`);
+    // console.log(`Recipient: ${userWallet.walletAddress}`);
+    
+    let txnId;
+    try {
+      txnId = await makeCryptoTransaction(rewardAmount, userWallet.walletAddress);
+      console.log(`✓ Transaction successful: ${txnId}`);
+    } catch (error) {
+      console.error(`✗ Blockchain transaction failed:`, error);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send USDT to wallet. Please try again later.",
+        error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      });
+    }
+
+    // Update level status to Claimed in HybridPackage
+    if (userLevel) {
+      userLevel.status = "Claimed";
+      userLevel.claimedAt = new Date();
+      userLevel.txnId = txnId;
+    } else {
+      hybridPackage.levels.push({
+        level: level,
+        status: "Claimed",
+        rewardAmount: rewardAmount,
+        claimedAt: new Date(),
+        txnId: txnId,
+      });
+    }
     await hybridPackage.save();
+
+    // console.log(`\n💰 REWARD DISTRIBUTED`);
+    // console.log(`Wallet Address: ${userWallet.walletAddress}`);
+    // console.log(`Reward Amount: $${rewardAmount}`);
+    // console.log(`Transaction ID: ${txnId}`);
+    // console.log(`Level: ${level}`);
+    // console.log(`========================================\n`);
 
     res.status(200).json({
       success: true,
-      message: "Reward claimed successfully",
-      rewardAmount: userLevel.rewardAmount,
+      message: `Level ${level} reward claimed successfully`,
+      data: {
+        level: level,
+        rewardAmount: rewardAmount,
+        walletAddress: userWallet.walletAddress,
+        txnId: txnId,
+        currentMembers: membersAtLevel,
+        requiredMembers: requiredMembers,
+      },
     });
   } catch (error) {
     console.error("Error claiming reward:", error);

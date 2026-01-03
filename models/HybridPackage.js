@@ -61,12 +61,12 @@ const hybridPackageSchema = new mongoose.Schema(
           type: Number,
           default: 0,
         },
-        achievedAt: {
+        claimedAt: {
           type: Date,
           default: null,
         },
-        claimedAt: {
-          type: Date,
+        txnId: {
+          type: String,
           default: null,
         },
       },
