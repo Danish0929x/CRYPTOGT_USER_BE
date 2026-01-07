@@ -487,6 +487,8 @@ exports.getDirectHybridPackages = async (req, res) => {
       totalInvestment: totalDirectHybridInvestment,
       data: directHybridPackages.map((pkg) => ({
         id: pkg._id,
+        userId: pkg.userId,
+        userName: userMap[pkg.userId] || "N/A",
         amount: 10,
         type: "Hybrid",
         status: pkg.status,

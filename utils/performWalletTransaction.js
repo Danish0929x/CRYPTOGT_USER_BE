@@ -30,8 +30,8 @@ async function performWalletTransaction(
   if (isNaN(amt)) throw new Error("Invalid amount");
 
   // Validate wallet name against current model
-  if (!["USDTBalance", "autopoolBalance", "utilityBalance"].includes(walletName)) {
-    throw new Error("Invalid wallet name. Must be 'USDTBalance', 'autopoolBalance' or 'utilityBalance'");
+  if (!["USDTBalance", "autopoolBalance", "utilityBalance", "hybridBalance"].includes(walletName)) {
+    throw new Error("Invalid wallet name. Must be 'USDTBalance', 'autopoolBalance', 'utilityBalance' or 'hybridBalance'");
   }
 
   const userWallet = await Wallet.findOne({ userId });
@@ -87,7 +87,7 @@ async function updateTransactionStatus(transactionId, newStatus) {
     const userWallet = await Wallet.findOne({ userId: tx.userId });
     if (!userWallet) throw new Error("User's wallet not found");
 
-    if (!["USDTBalance", "autopoolBalance", "utilityBalance"].includes(tx.walletName)) {
+    if (!["USDTBalance", "autopoolBalance", "utilityBalance", "hybridBalance"].includes(tx.walletName)) {
       throw new Error("Invalid walletName in transaction");
     }
 

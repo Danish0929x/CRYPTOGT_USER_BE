@@ -151,6 +151,7 @@ exports.getWallet = async (req, res) => {
       USDTBalance: wallet.USDTBalance,
       autopoolBalance: wallet.autopoolBalance,
       utilityBalance: wallet.utilityBalance,
+      hybridBalance: wallet.hybridBalance || 0,
       createdAt:      wallet.createdAt,
       lastUpdated: wallet.updatedAt,
     };

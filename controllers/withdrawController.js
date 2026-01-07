@@ -109,7 +109,6 @@ const withdrawUSDT = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Withdraw USDT error:", error);
     res.status(500).json({
       success: false,
       message: "Internal Server Error",
@@ -120,29 +119,20 @@ const withdrawUSDT = async (req, res) => {
 
 const payout = async (transaction) => {
   try {
-    console.log(`Processing payout for transaction ${transaction._id}`);
-
     // 1. Get user wallet to fetch the wallet address
     const user = await User.findOne({ userId: transaction.userId });
     if (!user || !user.walletAddress) {
-      console.error(
-        `User or wallet address not found for user ${transaction.userId}`
-      );
       return;
     }
 
     // 2. Validate wallet address format
     if (!/^0x[a-fA-F0-9]{40}$/.test(user.walletAddress)) {
-      console.error(
-        `Invalid wallet address format for user ${transaction.userId}: ${user.walletAddress}`
-      );
       return;
     }
 
     // 3. Get live rate from Assets
     const assetsData = await Assets.findOne({});
     if (!assetsData || !assetsData.liveRate || assetsData.liveRate <= 0) {
-      console.error("Live rate not found or invalid in Assets");
       return;
     }
 
@@ -160,18 +150,8 @@ const payout = async (transaction) => {
     const utilityAmount = requestedAmount * UTILITY_RATE;
     const autopoolAmount = requestedAmount * AUTOPOOL_RATE;
 
-    // console.log(`Payout calculation:`, {
-    //   requestedAmount,
-    //   adjustedUSDTAmount,
-    //   tokenAmountToSend,
-    //   utilityAmount,
-    //   autopoolAmount,
-    //   liveRate
-    // });
-
     // 5. Validate calculated amounts
     if (tokenAmountToSend <= 0) {
-      console.error("Calculated token amount is invalid:", tokenAmountToSend);
       return;
     }
 
@@ -182,11 +162,8 @@ const payout = async (transaction) => {
     );
 
     if (!txnHash) {
-      console.error("Failed to generate transaction hash");
       return;
     }
-
-    // console.log(`Crypto transaction successful. Hash: ${txnHash}`);
 
     // 7. Update transaction status
     const updatedTransaction = await Transaction.findByIdAndUpdate(
@@ -209,7 +186,6 @@ const payout = async (transaction) => {
     );
 
     if (!updatedTransaction) {
-      console.error("Failed to update transaction");
       return;
     }
 
@@ -229,30 +205,7 @@ const payout = async (transaction) => {
       "Autopool Bonus From withdraw",
       "Completed"
     );
-
-    console.log(
-      `Payout completed successfully for transaction ${transaction._id}`
-    );
-
-    // 9. Log the successful payout
-    console.log(`Payout summary:`, {
-      transactionId: transaction._id,
-      userId: transaction.userId,
-      walletAddress: user.walletAddress,
-      requestedUSDT: requestedAmount,
-      adjustedUSDT: adjustedUSDTAmount,
-      tokensSent: tokenAmountToSend,
-      utilityBonus: utilityAmount,
-      autopoolBonus: autopoolAmount,
-      liveRateUsed: liveRate,
-      txnHash,
-    });
   } catch (error) {
-    console.error(
-      `Error processing payout for transaction ${transaction._id}:`,
-      error
-    );
-
     // Optional: Update transaction status to failed
     try {
       await Transaction.findByIdAndUpdate(transaction._id, {
@@ -264,10 +217,7 @@ const payout = async (transaction) => {
         },
       });
     } catch (updateError) {
-      console.error(
-        "Failed to update transaction status to failed:",
-        updateError
-      );
+      // Silent fail
     }
   }
 };
@@ -359,9 +309,7 @@ const withdrawHybrid = async (req, res) => {
 
     try {
       realWalletTxHash = await makeUSDTCryptoTransaction(realWalletAmount, user.walletAddress);
-      console.log(`Hybrid Withdrawal: Sent ${realWalletAmount} USDT to ${user.walletAddress}, txHash: ${realWalletTxHash}`);
     } catch (cryptoError) {
-      console.error("Error sending USDT for Hybrid withdrawal:", cryptoError.message);
       
       // Create failed transaction record
       const failedTx = new Transaction({
@@ -544,8 +492,150 @@ const getHybridWithdrawalHistory = async (req, res) => {
   }
 };
 
+const withdrawHybridBalance = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { amount } = req.body;
+
+    // 1. Validate amount
+    if (!amount || isNaN(amount) || Number(amount) < 5) {
+      return res.status(400).json({
+        success: false,
+        message: "Minimum withdrawal amount is $5",
+      });
+    }
+
+    if (Number(amount) > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Maximum withdrawal amount is $100",
+      });
+    }
+
+    const withdrawAmount = Number(amount);
+
+    // 2. Find user
+    const user = await User.findOne({ userId });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // 3. Find wallet and check hybrid balance
+    const wallet = await Wallet.findOne({ userId });
+    if (!wallet) {
+      return res.status(404).json({
+        success: false,
+        message: "Wallet not found",
+      });
+    }
+
+    if (wallet.hybridBalance < withdrawAmount) {
+      return res.status(400).json({
+        success: false,
+        message: "Insufficient hybrid balance",
+        availableBalance: wallet.hybridBalance,
+      });
+    }
+
+    // 4. Check for existing pending withdrawal
+    const pendingWithdrawal = await Transaction.findOne({
+      userId,
+      status: "Pending",
+      transactionRemark: { $regex: "^Withdraw Hybrid Balance" },
+    });
+
+    if (pendingWithdrawal) {
+      return res.status(400).json({
+        success: false,
+        message: "You already have a pending hybrid withdrawal request",
+      });
+    }
+
+    // 5. Validate wallet address for USDT transaction
+    if (!user.walletAddress || !/^0x[a-fA-F0-9]{40}$/.test(user.walletAddress)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid wallet address required for hybrid withdrawal",
+      });
+    }
+
+    // 6. Send hybrid amount with distribution
+    const { sendHybridAmount } = require("../functions/sendHybridAmount");
+
+    try {
+      const result = await sendHybridAmount(withdrawAmount, userId, user.walletAddress);
+
+      // 7. Deduct from hybrid balance
+      wallet.hybridBalance -= withdrawAmount;
+      await wallet.save();
+
+      // 8. Create transaction record for hybrid balance debit
+      const hybridDebitTx = new Transaction({
+        userId,
+        walletName: "hybridBalance",
+        creditedAmount: 0,
+        debitedAmount: withdrawAmount,
+        transactionRemark: `Withdraw Hybrid Balance - $${withdrawAmount} (50% USDT + 30% Main Balance)`,
+        status: "Completed",
+        currentBalance: wallet.hybridBalance,
+        metadata: {
+          withdrawalType: "HybridBalance",
+          usdtTransaction: result.usdtTransaction,
+          mainBalance: result.mainBalanceCredit,
+          txHash: result.txHash,
+        },
+      });
+      await hybridDebitTx.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Hybrid balance withdrawal initiated successfully",
+        details: {
+          withdrawalAmount: withdrawAmount,
+          mainBalanceCredit: result.mainBalanceCredit,
+          usdtTransaction: result.usdtTransaction,
+          txHash: result.txHash,
+        },
+      });
+    } catch (cryptoError) {
+      console.error("Error sending hybrid amount:", cryptoError.message);
+
+      // Create failed transaction record
+      const failedTx = new Transaction({
+        userId,
+        walletName: "hybridBalance",
+        creditedAmount: 0,
+        debitedAmount: withdrawAmount,
+        transactionRemark: `Withdraw Hybrid Balance - Failed (Amount: ${withdrawAmount})`,
+        status: "Failed",
+        metadata: {
+          error: cryptoError.message,
+        },
+      });
+      await failedTx.save();
+
+      return res.status(500).json({
+        success: false,
+        message: "Failed to process hybrid withdrawal",
+        error: cryptoError.message,
+      });
+    }
+  } catch (error) {
+    console.error("Hybrid balance withdrawal error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
 module.exports = {
   withdrawUSDT,
   withdrawHybrid,
   getHybridWithdrawalHistory,
+  withdrawHybridBalance,
 };
