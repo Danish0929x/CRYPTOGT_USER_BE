@@ -69,6 +69,10 @@ const hybridPackageSchema = new mongoose.Schema(
           type: Date,
           default: null,
         },
+        txnHash: {
+          type: String,
+          default: null,
+        },
       },
     ],
     createdAt: {

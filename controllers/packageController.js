@@ -6,6 +6,8 @@ const Wallet = require("../models/Wallet");
 const { performWalletTransaction } = require("../utils/performWalletTransaction");
 const { handleDirectMembers } = require("../functions/checkProductVoucher");
 const User = require("../models/User");
+const { sendHybridAmount } = require("../functions/sendHybridAmount");
+const { makeCryptoTransaction } = require("../utils/makeUSDTCryptoTransaction");
 
 // Level Configuration based on International AutoPool
 const LEVEL_CONFIG = {
@@ -70,54 +72,14 @@ const countMembersByDepth = async (packageId, maxDepth = 15) => {
   return depthCounts;
 };
 
-// Helper function to check and update user levels
-const updateUserLevels = async (packageId) => {
+// Helper function to check if a level is achieved
+const isLevelAchieved = async (packageId, level) => {
   try {
-    const pkg = await HybridPackage.findById(packageId);
-    if (!pkg) return;
-
     const totalMembers = await countTreeMembers(packageId);
-
-    // Determine which levels are achieved
-    const achievedLevels = Object.keys(LEVEL_CONFIG).filter(
-      (level) => totalMembers >= LEVEL_CONFIG[level].members
-    );
-
-    // Update levels array
-    if (!pkg.levels) {
-      pkg.levels = [];
-    }
-
-    // Initialize all levels (starting from 0)
-    for (let level = 0; level <= 15; level++) {
-      const existingLevel = pkg.levels.find((l) => l.level === level);
-
-      if (achievedLevels.includes(level.toString())) {
-        if (!existingLevel) {
-          pkg.levels.push({
-            level,
-            status: "Achieved",
-            rewardAmount: LEVEL_CONFIG[level] ? LEVEL_CONFIG[level].amount : 0,
-            achievedAt: new Date(),
-          });
-        } else if (existingLevel.status === "Pending") {
-          existingLevel.status = "Achieved";
-          existingLevel.achievedAt = new Date();
-        }
-      } else {
-        if (!existingLevel) {
-          pkg.levels.push({
-            level,
-            status: "Pending",
-            rewardAmount: LEVEL_CONFIG[level] ? LEVEL_CONFIG[level].amount : 0,
-          });
-        }
-      }
-    }
-
-    await pkg.save();
+    return totalMembers >= LEVEL_CONFIG[level].members;
   } catch (error) {
-    console.error("Error updating user levels:", error);
+    console.error("Error checking level achievement:", error);
+    return false;
   }
 };
 
@@ -408,24 +370,39 @@ exports.getHybridPackageByUserId = async (req, res) => {
     const hybridPackages = await HybridPackage.find({
       userId,
     })
-      .sort({ createdAt: -1 })
-      .select("status createdAt");
+      .sort({ createdAt: -1 });
 
     // Calculate total investment in Hybrid packages (fixed 10 USDT per package)
     const totalHybridInvestment = hybridPackages.length * 10;
+
+    // Extract claimed levels from packages
+    const claimedLevels = new Set();
+    const levelDetails = [];
+
+    hybridPackages.forEach((pkg) => {
+      if (pkg.levels && Array.isArray(pkg.levels)) {
+        pkg.levels.forEach((level) => {
+          if (level.status === "Claimed") {
+            claimedLevels.add(level.level);
+            levelDetails.push({
+              level: level.level,
+              status: level.status,
+              rewardAmount: level.rewardAmount,
+              claimedAt: level.claimedAt,
+            });
+          }
+        });
+      }
+    });
 
     res.status(200).json({
       success: true,
       message: "Hybrid packages retrieved successfully",
       count: hybridPackages.length,
       totalInvestment: totalHybridInvestment,
-      data: hybridPackages.map((pkg) => ({
-        id: pkg._id,
-        amount: 10,
-        type: "Hybrid",
-        status: pkg.status,
-        createdAt: pkg.createdAt,
-      })),
+      claimedLevels: Array.from(claimedLevels),
+      levels: levelDetails,
+      data: hybridPackages,
     });
   } catch (error) {
     console.error("Error fetching Hybrid packages:", error);
@@ -505,69 +482,6 @@ exports.getDirectHybridPackages = async (req, res) => {
   }
 };
 
-exports.getHybridAutopoolTree = async (req, res) => {
-  try {
-    const userId = req.user.userId;
-
-    if (!userId) {
-      return res.status(400).json({
-        success: false,
-        message: "User ID is required",
-      });
-    }
-
-    // Get the current user's hybrid package
-    const userPackage = await HybridPackage.findOne({ userId }).select(
-      "userId position parentPackageId leftChildId rightChildId createdAt"
-    );
-
-    if (!userPackage) {
-      return res.status(200).json({
-        success: true,
-        message: "No hybrid package found",
-        data: null,
-      });
-    }
-
-    // Recursive function to build the tree with user details
-    const buildTree = async (packageId, currentUserId) => {
-      if (!packageId) return null;
-
-      const pkg = await HybridPackage.findById(packageId)
-        .select("userId position parentPackageId leftChildId rightChildId createdAt")
-        .lean();
-
-      if (!pkg) return null;
-
-      return {
-        id: pkg._id,
-        userId: pkg.userId,
-        position: pkg.position,
-        isCurrentUser: pkg.userId === currentUserId,
-        createdAt: pkg.createdAt,
-        leftChild: await buildTree(pkg.leftChildId, currentUserId),
-        rightChild: await buildTree(pkg.rightChildId, currentUserId),
-      };
-    };
-
-    // Build tree starting from current user's package
-    const tree = await buildTree(userPackage._id, userId);
-
-    res.status(200).json({
-      success: true,
-      message: "Hybrid autopool tree retrieved successfully",
-      data: tree,
-    });
-  } catch (error) {
-    console.error("Error fetching Hybrid Autopool tree:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch Hybrid Autopool tree",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
-    });
-  }
-};
-
 exports.getUserLevels = async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -590,36 +504,38 @@ exports.getUserLevels = async (req, res) => {
       });
     }
 
-    // Update levels before returning (check if new levels are achieved)
-    await updateUserLevels(hybridPackage._id);
-
-    // Fetch updated package
-    const updatedPackage = await HybridPackage.findOne({ userId });
-
-    // Count members at each depth level (each row of binary tree)
+    // Count members at each depth level
     const depthCounts = await countMembersByDepth(hybridPackage._id);
 
-    // Enrich levels with current member count
-    // Each level shows members at the NEXT depth level
-    // Level 1 needs 2 members = members at depth 2
-    // Level 2 needs 4 members = members at depth 2 + 3 (cumulative)
-    // Level 3 needs 8 members = members at depth 2 + 3 + 4 (cumulative), etc.
-    const enrichedLevels = (updatedPackage.levels || []).map((level) => {
+    // Generate all levels with their status and member counts
+    const allLevels = [];
+    for (let levelNum = 1; levelNum <= 15; levelNum++) {
+      // Check if this level is claimed
+      const claimedLevel = hybridPackage.levels.find((l) => l.level === levelNum);
+
+      // Calculate current members for this level
       let currentMembers = 0;
-      // For each level, sum members from depth 2 to level+1 (the children that fill this level)
-      for (let d = 2; d <= level.level + 1; d++) {
+      for (let d = 2; d <= levelNum + 1; d++) {
         currentMembers += depthCounts[d] || 0;
       }
-      return {
-        ...level.toObject ? level.toObject() : level,
+
+      // Check if level is achieved
+      const isAchieved = currentMembers >= LEVEL_CONFIG[levelNum].members;
+
+      allLevels.push({
+        level: levelNum,
+        status: claimedLevel ? claimedLevel.status : (isAchieved ? "Achieved" : "Pending"),
+        rewardAmount: LEVEL_CONFIG[levelNum].amount,
         currentMembers: currentMembers,
-      };
-    });
+        requiredMembers: LEVEL_CONFIG[levelNum].members,
+        claimedAt: claimedLevel ? claimedLevel.claimedAt : null,
+      });
+    }
 
     res.status(200).json({
       success: true,
       message: "User levels retrieved successfully",
-      data: enrichedLevels,
+      data: allLevels,
     });
   } catch (error) {
     console.error("Error fetching user levels:", error);
@@ -631,55 +547,206 @@ exports.getUserLevels = async (req, res) => {
   }
 };
 
+exports.getHybridAutopoolTree = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    // Get the current user's hybrid package
+    const userPackage = await HybridPackage.findOne({ userId }).select(
+      "_id userId position parentPackageId leftChildId rightChildId createdAt"
+    );
+
+    if (!userPackage) {
+      return res.status(200).json({
+        success: true,
+        message: "No hybrid package found",
+        data: null,
+      });
+    }
+
+    // Fetch all packages in one query
+    const allPackages = await HybridPackage.find({}).select(
+      "_id userId position parentPackageId leftChildId rightChildId createdAt"
+    ).lean();
+
+    // Create a map for quick lookup
+    const packageMap = {};
+    allPackages.forEach((pkg) => {
+      packageMap[pkg._id] = pkg;
+    });
+
+    // Recursive function to build the tree
+    const buildTree = (packageId, currentUserId) => {
+      if (!packageId) return null;
+
+      const pkg = packageMap[packageId];
+      if (!pkg) return null;
+
+      return {
+        id: pkg._id.toString(),
+        userId: pkg.userId,
+        position: pkg.position,
+        isCurrentUser: pkg.userId === currentUserId,
+        createdAt: pkg.createdAt,
+        leftChild: buildTree(pkg.leftChildId, currentUserId),
+        rightChild: buildTree(pkg.rightChildId, currentUserId),
+      };
+    };
+
+    // Build tree starting from current user's package
+    const tree = buildTree(userPackage._id, userId);
+
+    res.status(200).json({
+      success: true,
+      message: "Hybrid autopool tree retrieved successfully",
+      data: tree,
+    });
+  } catch (error) {
+    console.error("Error fetching Hybrid Autopool tree:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch Hybrid Autopool tree",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
 exports.claimLevelReward = async (req, res) => {
   try {
     const userId = req.user.userId;
     const { level } = req.body;
 
-    if (!userId || !level) {
+    if (!level || level < 1 || level > 15) {
       return res.status(400).json({
         success: false,
-        message: "User ID and level are required",
+        message: "Invalid level. Level must be between 1 and 15.",
       });
     }
 
     // Get user's hybrid package
     const hybridPackage = await HybridPackage.findOne({ userId });
-
     if (!hybridPackage) {
-      return res.status(404).json({
-        success: false,
-        message: "Hybrid package not found",
-      });
-    }
-
-    // Find the level
-    const userLevel = hybridPackage.levels.find((l) => l.level === level);
-
-    if (!userLevel) {
       return res.status(400).json({
         success: false,
-        message: "Level not found",
+        message: "No hybrid package found for user",
       });
     }
 
-    if (userLevel.status !== "Achieved") {
+    // Check if level already claimed
+    const existingLevel = hybridPackage.levels.find((l) => l.level === level);
+    if (existingLevel && existingLevel.status === "Claimed") {
       return res.status(400).json({
         success: false,
-        message: "Level is not achieved yet or reward already claimed",
+        message: `Level ${level} has already been claimed`,
       });
     }
 
-    // Mark as claimed
-    userLevel.status = "Claimed";
-    userLevel.claimedAt = new Date();
+    // Get user's wallet to send crypto
+    const user = await User.findOne({ userId });
+    if (!user || !user.walletAddress) {
+      return res.status(400).json({
+        success: false,
+        message: "User wallet address not found",
+      });
+    }
 
+    // Calculate reward amount: percentage of amount from LEVEL_CONFIG
+    const levelConfig = LEVEL_CONFIG[level];
+    const rewardAmount = (levelConfig.amount * levelConfig.percentage) / 100;
+
+    console.log(`Claiming level ${level} for user ${userId}, reward amount: ${rewardAmount}`);
+
+    // For levels 1-4, call makeCryptoTransaction with full amount
+    let txnHash = null;
+    if (level >= 1 && level <= 4) {
+      try {
+        txnHash = await makeCryptoTransaction(rewardAmount, user.walletAddress);
+        console.log(`Crypto transaction successful for level ${level}: ${txnHash}`);
+      } catch (cryptoError) {
+        console.error(`Crypto transaction failed for level ${level}:`, cryptoError);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to process crypto transaction",
+          error: cryptoError.message,
+        });
+      }
+    }
+
+    // For levels 5 and 6, split distribution: 50% crypto + 30% wallet balance
+    if (level === 5 || level === 6) {
+      const cryptoAmount = (rewardAmount * 50) / 100;
+      const walletAmount = (rewardAmount * 30) / 100;
+
+      // Send 50% via makeCryptoTransaction
+      try {
+        txnHash = await makeCryptoTransaction(cryptoAmount, user.walletAddress);
+        console.log(`Crypto transaction successful for level ${level}: ${txnHash}`);
+      } catch (cryptoError) {
+        console.error(`Crypto transaction failed for level ${level}:`, cryptoError);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to process crypto transaction",
+          error: cryptoError.message,
+        });
+      }
+
+      // Add 30% to USDTBalance via performWalletTransaction
+      try {
+        await performWalletTransaction(
+          userId,
+          walletAmount,
+          "USDTBalance",
+          `Level ${level} reward (30% wallet distribution)`,
+          "Completed"
+        );
+        console.log(`Level ${level} wallet distribution successful: ${walletAmount} USDT added to USDTBalance`);
+      } catch (walletError) {
+        console.error(`Level ${level} wallet distribution failed:`, walletError);
+        return res.status(500).json({
+          success: false,
+          message: `Failed to distribute level ${level} reward to wallet`,
+          error: walletError.message,
+        });
+      }
+    }
+
+    // Update the level in the hybrid package
+    if (existingLevel) {
+      existingLevel.status = "Claimed";
+      existingLevel.claimedAt = new Date();
+      existingLevel.rewardAmount = rewardAmount;
+      if (txnHash) {
+        existingLevel.txnHash = txnHash;
+      }
+    } else {
+      hybridPackage.levels.push({
+        level,
+        status: "Claimed",
+        rewardAmount,
+        achievedAt: new Date(),
+        claimedAt: new Date(),
+        txnHash: txnHash || null,
+      });
+    }
+
+    // Save the hybrid package
     await hybridPackage.save();
 
     res.status(200).json({
       success: true,
       message: "Reward claimed successfully",
-      rewardAmount: userLevel.rewardAmount,
+      data: {
+        level,
+        rewardAmount,
+        txnHash: txnHash || null,
+      },
     });
   } catch (error) {
     console.error("Error claiming reward:", error);
