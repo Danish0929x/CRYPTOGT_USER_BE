@@ -269,18 +269,18 @@ exports.createHybridPackage = async (req, res) => {
         // Level = floor(log2(position)) + 1
         const parentLevel = Math.floor(Math.log2(parentHybridPackage.position)) + 1;
         const parentRowStart = Math.pow(2, parentLevel - 1);
-        const parentRowEnd = Math.pow(2, parentLevel) - 1;
 
-        // Count siblings (users with same parentId) whose packages are ONLY in parent's row
+        // Count siblings (users with same parentId) whose packages are at position >= parent's row start
+        // This includes parent's row AND all rows after/below it
         const siblings = await User.find({ parentId: user.parentId }).select('userId');
         const siblingUserIds = siblings.map(u => u.userId);
-        const siblingsWithPackagesInParentRow = await HybridPackage.find({
+        const siblingsWithPackagesFromParentRowOnward = await HybridPackage.find({
           userId: { $in: siblingUserIds },
-          position: { $gte: parentRowStart, $lte: parentRowEnd }
+          position: { $gte: parentRowStart }
         });
-        const siblingCount = siblingsWithPackagesInParentRow.length;
+        const siblingCount = siblingsWithPackagesFromParentRowOnward.length;
 
-        console.log(`User ${userId} has ${siblingCount} siblings with packages in parent's row (${parentRowStart}-${parentRowEnd})`);
+        console.log(`User ${userId} has ${siblingCount} siblings with packages from position ${parentRowStart} onwards`);
 
         // 3rd sibling direct (index 2) - place as left child of parent
         if (siblingCount === 2 && !parentHybridPackage.leftChildId) {
