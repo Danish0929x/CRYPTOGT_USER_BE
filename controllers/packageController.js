@@ -255,19 +255,73 @@ exports.createHybridPackage = async (req, res) => {
       });
     }
 
-    // Calculate next position in binary tree
-    const totalPackages = await HybridPackage.countDocuments();
-    const newPosition = totalPackages + 1;
-
-    // Calculate parent position (binary tree logic)
+    let newPosition = null;
     let parentPackageId = null;
-    if (newPosition > 1) {
-      const parentPosition = Math.floor(newPosition / 2);
-      const parentPackage = await HybridPackage.findOne({ position: parentPosition });
+    let placedAsDirectChild = false;
 
-      if (parentPackage) {
-        parentPackageId = parentPackage._id;
+    // SPONSORED PLACEMENT: Check if user has a parent (referral sponsor)
+    if (user.parentId) {
+      // Get parent's hybrid package
+      const parentHybridPackage = await HybridPackage.findOne({ userId: user.parentId });
+
+      if (parentHybridPackage) {
+        // Calculate parent's row (level) in binary tree
+        // Level = floor(log2(position)) + 1
+        const parentLevel = Math.floor(Math.log2(parentHybridPackage.position)) + 1;
+        const parentRowStart = Math.pow(2, parentLevel - 1);
+        const parentRowEnd = Math.pow(2, parentLevel) - 1;
+
+        // Count siblings (users with same parentId) whose packages are ONLY in parent's row
+        const siblings = await User.find({ parentId: user.parentId }).select('userId');
+        const siblingUserIds = siblings.map(u => u.userId);
+        const siblingsWithPackagesInParentRow = await HybridPackage.find({
+          userId: { $in: siblingUserIds },
+          position: { $gte: parentRowStart, $lte: parentRowEnd }
+        });
+        const siblingCount = siblingsWithPackagesInParentRow.length;
+
+        console.log(`User ${userId} has ${siblingCount} siblings with packages in parent's row (${parentRowStart}-${parentRowEnd})`);
+
+        // 3rd sibling direct (index 2) - place as left child of parent
+        if (siblingCount === 2 && !parentHybridPackage.leftChildId) {
+          newPosition = parentHybridPackage.position * 2;
+          parentPackageId = parentHybridPackage._id;
+          placedAsDirectChild = true;
+          console.log(`Placing user ${userId} as 3rd direct sibling (left child) at position ${newPosition}`);
+        }
+        // 4th sibling direct (index 3) - place as right child of parent
+        else if (siblingCount === 3 && !parentHybridPackage.rightChildId) {
+          newPosition = parentHybridPackage.position * 2 + 1;
+          parentPackageId = parentHybridPackage._id;
+          placedAsDirectChild = true;
+          console.log(`Placing user ${userId} as 4th direct sibling (right child) at position ${newPosition}`);
+        }
+        // 1st, 2nd, and 5th+ siblings - use sequential placement
+        else {
+          console.log(`User ${userId} is sibling #${siblingCount + 1}, using sequential placement`);
+        }
       }
+    }
+
+    // SEQUENTIAL PLACEMENT: If not placed as direct child, find next available position
+    if (!placedAsDirectChild) {
+      // Find highest current position and use next available
+      const highestPackage = await HybridPackage.findOne()
+        .sort({ position: -1 })
+        .select('position');
+
+      newPosition = (highestPackage?.position || 0) + 1;
+
+      // Find parent for this position using binary tree logic
+      if (newPosition > 1) {
+        const parentPosition = Math.floor(newPosition / 2);
+        const parentPackage = await HybridPackage.findOne({ position: parentPosition });
+        if (parentPackage) {
+          parentPackageId = parentPackage._id;
+        }
+      }
+
+      console.log(`Placing user ${userId} at sequential position ${newPosition}`);
     }
 
     // Create new hybrid package with fixed amount of 10 USDT using HybridPackage model
@@ -299,7 +353,10 @@ exports.createHybridPackage = async (req, res) => {
     res.status(201).json({
       success: true,
       message: "Hybrid package created successfully",
-      data: newHybridPackage,
+      data: {
+        ...newHybridPackage.toObject(),
+        placedAs: placedAsDirectChild ? "direct_child" : "sequential",
+      },
     });
   } catch (err) {
     console.error("Error creating hybrid package:", err);
