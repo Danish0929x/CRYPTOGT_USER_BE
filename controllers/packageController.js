@@ -11,21 +11,21 @@ const { makeCryptoTransaction } = require("../utils/makeUSDTCryptoTransaction");
 
 // Level Configuration based on International AutoPool
 const LEVEL_CONFIG = {
-  1: { members: 2, percentage: 5, amount: 20 },
-  2: { members: 4, percentage: 5, amount: 40 },
-  3: { members: 8, percentage: 5, amount: 80 },
-  4: { members: 16, percentage: 5, amount: 160 },
-  5: { members: 32, percentage: 5, amount: 320 },
-  6: { members: 64, percentage: 5, amount: 640 },
-  7: { members: 128, percentage: 5, amount: 1280 },
-  8: { members: 256, percentage: 5, amount: 2560 },
-  9: { members: 512, percentage: 5, amount: 5120 },
-  10: { members: 1024, percentage: 5, amount: 10240 },
-  11: { members: 2048, percentage: 3, amount: 20460 },
-  12: { members: 4096, percentage: 3, amount: 40960 },
-  13: { members: 8192, percentage: 3, amount: 81920 },
-  14: { members: 16384, percentage: 3, amount: 163840 },
-  15: { members: 32768, percentage: 3, amount: 327680 },
+  1: { members: 2, percentage: 5, amount: 20, direct: 0 },
+  2: { members: 4, percentage: 5, amount: 40, direct: 0 },
+  3: { members: 8, percentage: 5, amount: 80, direct: 0 },
+  4: { members: 16, percentage: 5, amount: 160, direct: 0 },
+  5: { members: 32, percentage: 5, amount: 320, direct: 1 },
+  6: { members: 64, percentage: 5, amount: 640, direct: 1 },
+  7: { members: 128, percentage: 5, amount: 1280, direct: 2 },
+  8: { members: 256, percentage: 5, amount: 2560, direct: 2 },
+  9: { members: 512, percentage: 5, amount: 5120, direct: 3 },
+  10: { members: 1024, percentage: 5, amount: 10240, direct: 3 },
+  11: { members: 2048, percentage: 3, amount: 20460, direct: 4 },
+  12: { members: 4096, percentage: 3, amount: 40960, direct: 4 },
+  13: { members: 8192, percentage: 3, amount: 81920, direct: 5 },
+  14: { members: 16384, percentage: 3, amount: 163840, direct: 10 },
+  15: { members: 32768, percentage: 3, amount: 327680, direct: 15 },
 };
 
 // Helper function to count total members under a user in the tree
@@ -657,8 +657,30 @@ exports.claimLevelReward = async (req, res) => {
       });
     }
 
-    // Calculate reward amount: percentage of amount from LEVEL_CONFIG
+    // Check direct referral requirement for levels > 4
     const levelConfig = LEVEL_CONFIG[level];
+    if (level > 4 && levelConfig.direct > 0) {
+      try {
+        // Count direct referrals (users who have this userId as parentId)
+        const directCount = await User.countDocuments({ parentId: userId });
+
+        if (directCount < levelConfig.direct) {
+          return res.status(400).json({
+            success: false,
+            message: `Insufficient direct referrals. Level ${level} requires ${levelConfig.direct} direct referrals, but you have ${directCount}.`,
+          });
+        }
+      } catch (error) {
+        console.error("Error checking direct referrals:", error);
+        return res.status(500).json({
+          success: false,
+          message: "Error verifying direct referral requirement",
+          error: error.message,
+        });
+      }
+    }
+
+    // Calculate reward amount: percentage of amount from LEVEL_CONFIG
     const rewardAmount = (levelConfig.amount * levelConfig.percentage) / 100;
 
     console.log(`Claiming level ${level} for user ${userId}, reward amount: ${rewardAmount}`);
