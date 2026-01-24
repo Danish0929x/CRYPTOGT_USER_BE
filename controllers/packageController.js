@@ -570,6 +570,13 @@ exports.getHybridPackageByUserId = async (req, res) => {
       }
     });
 
+    // Check if user is eligible for double bonus (levels 1-4)
+    let eligibleForDoubleBonus = false;
+    if (hybridPackages.length > 0) {
+      // Check the first (primary) hybrid package
+      eligibleForDoubleBonus = await checkDoubleBonusCondition(hybridPackages[0]);
+    }
+
     res.status(200).json({
       success: true,
       message: "Hybrid packages retrieved successfully",
@@ -577,6 +584,7 @@ exports.getHybridPackageByUserId = async (req, res) => {
       totalInvestment: totalHybridInvestment,
       claimedLevels: Array.from(claimedLevels),
       levels: levelDetails,
+      eligibleForDoubleBonus: eligibleForDoubleBonus,
       data: hybridPackages,
     });
   } catch (error) {
@@ -793,6 +801,57 @@ exports.getHybridAutopoolTree = async (req, res) => {
   }
 };
 
+// Helper function to check if both children share the same parent (for double bonus)
+const checkDoubleBonusCondition = async (hybridPackage) => {
+  try {
+    // Both children must exist
+    if (!hybridPackage.leftChildId || !hybridPackage.rightChildId) {
+      console.log('Double bonus check: Missing child packages');
+      return false;
+    }
+
+    // Fetch both child packages to get their userIds
+    const [leftChild, rightChild] = await Promise.all([
+      HybridPackage.findById(hybridPackage.leftChildId).select('userId'),
+      HybridPackage.findById(hybridPackage.rightChildId).select('userId')
+    ]);
+
+    if (!leftChild || !rightChild) {
+      console.log('Double bonus check: Child packages not found');
+      return false;
+    }
+
+    console.log(`Double bonus check: Left child userId: ${leftChild.userId}, Right child userId: ${rightChild.userId}`);
+
+    // Fetch both users to get their parentIds
+    const [leftChildUser, rightChildUser] = await Promise.all([
+      User.findOne({ userId: leftChild.userId }).select('parentId'),
+      User.findOne({ userId: rightChild.userId }).select('parentId')
+    ]);
+
+    if (!leftChildUser || !rightChildUser) {
+      console.log('Double bonus check: Child users not found');
+      return false;
+    }
+
+    console.log(`Double bonus check: Left child parentId: ${leftChildUser.parentId}, Right child parentId: ${rightChildUser.parentId}`);
+
+    // Check if both children have the same parentId
+    if (leftChildUser.parentId && rightChildUser.parentId &&
+        leftChildUser.parentId === rightChildUser.parentId) {
+      console.log(`✓ DOUBLE BONUS CONDITION MET! Both children share parentId: ${leftChildUser.parentId}`);
+      return true;
+    }
+
+    console.log('Double bonus check: Different parentIds');
+    return false;
+
+  } catch (error) {
+    console.error('Error checking double bonus condition:', error);
+    return false;
+  }
+};
+
 exports.claimLevelReward = async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -858,13 +917,28 @@ exports.claimLevelReward = async (req, res) => {
     // Calculate reward amount: percentage of amount from LEVEL_CONFIG
     const rewardAmount = (levelConfig.amount * levelConfig.percentage) / 100;
 
-    console.log(`Claiming level ${level} for user ${userId}, reward amount: ${rewardAmount}`);
+    console.log(`Claiming level ${level} for user ${userId}, base reward amount: ${rewardAmount}`);
+
+    // For levels 1-4, check if double bonus condition is met
+    let finalRewardAmount = rewardAmount;
+    let isDoubleBonus = false;
+
+    if (level >= 1 && level <= 4) {
+      isDoubleBonus = await checkDoubleBonusCondition(hybridPackage);
+
+      if (isDoubleBonus) {
+        finalRewardAmount = rewardAmount * 2;
+        console.log(`✓✓✓ DOUBLE BONUS APPLIED! Reward doubled from ${rewardAmount} to ${finalRewardAmount} USDT`);
+      }
+    }
+
+    console.log(`Final reward amount: ${finalRewardAmount} USDT`);
 
     // For levels 1-4, call makeCryptoTransaction with full amount
     let txnHash = null;
     if (level >= 1 && level <= 4) {
       try {
-        txnHash = await makeCryptoTransaction(rewardAmount, user.walletAddress);
+        txnHash = await makeCryptoTransaction(finalRewardAmount, user.walletAddress);
         console.log(`Crypto transaction successful for level ${level}: ${txnHash}`);
       } catch (cryptoError) {
         console.error(`Crypto transaction failed for level ${level}:`, cryptoError);
@@ -918,7 +992,7 @@ exports.claimLevelReward = async (req, res) => {
     if (existingLevel) {
       existingLevel.status = "Claimed";
       existingLevel.claimedAt = new Date();
-      existingLevel.rewardAmount = rewardAmount;
+      existingLevel.rewardAmount = finalRewardAmount;
       if (txnHash) {
         existingLevel.txnHash = txnHash;
       }
@@ -926,7 +1000,7 @@ exports.claimLevelReward = async (req, res) => {
       hybridPackage.levels.push({
         level,
         status: "Claimed",
-        rewardAmount,
+        rewardAmount: finalRewardAmount,
         achievedAt: new Date(),
         claimedAt: new Date(),
         txnHash: txnHash || null,
@@ -938,10 +1012,13 @@ exports.claimLevelReward = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "Reward claimed successfully",
+      message: isDoubleBonus
+        ? "Reward claimed successfully with double bonus!"
+        : "Reward claimed successfully",
       data: {
         level,
-        rewardAmount,
+        rewardAmount: finalRewardAmount,
+        doubleBonus: isDoubleBonus,
         txnHash: txnHash || null,
       },
     });
