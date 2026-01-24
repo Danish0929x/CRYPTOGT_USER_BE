@@ -301,19 +301,37 @@ exports.createHybridPackage = async (req, res) => {
         console.log(`Siblings with packages from position ${parentRowStart} onwards: ${siblingCount}`);
         console.log(`Sibling packages:`, siblingsWithPackagesFromParentRowOnward.map(p => ({ userId: p.userId, position: p.position })));
 
-        // 3rd sibling direct (index 2) - place as left child of parent
-        if (siblingCount === 2 && !parentHybridPackage.leftChildId) {
-          newPosition = parentHybridPackage.position * 2;
-          parentPackageId = parentHybridPackage._id;
-          placedAsDirectChild = true;
-          console.log(`✓ PLACING as 3rd direct sibling (LEFT CHILD) at position ${newPosition}`);
+        // 3rd sibling direct - try to fill parent's LEFT child first, then RIGHT if left is filled
+        if (siblingCount === 2) {
+          if (!parentHybridPackage.leftChildId) {
+            newPosition = parentHybridPackage.position * 2;
+            parentPackageId = parentHybridPackage._id;
+            placedAsDirectChild = true;
+            console.log(`✓ PLACING as 3rd direct sibling (LEFT CHILD) at position ${newPosition}`);
+          } else if (!parentHybridPackage.rightChildId) {
+            newPosition = parentHybridPackage.position * 2 + 1;
+            parentPackageId = parentHybridPackage._id;
+            placedAsDirectChild = true;
+            console.log(`✓ PLACING as 3rd direct sibling (RIGHT CHILD - left was filled) at position ${newPosition}`);
+          } else {
+            console.log(`⚠ User is sibling #3, but parent's both children are filled - using SEQUENTIAL placement`);
+          }
         }
-        // 4th sibling direct (index 3) - place as right child of parent
-        else if (siblingCount === 3 && !parentHybridPackage.rightChildId) {
-          newPosition = parentHybridPackage.position * 2 + 1;
-          parentPackageId = parentHybridPackage._id;
-          placedAsDirectChild = true;
-          console.log(`✓ PLACING as 4th direct sibling (RIGHT CHILD) at position ${newPosition}`);
+        // 4th sibling direct - try to fill parent's RIGHT child first, then LEFT if right is filled
+        else if (siblingCount === 3) {
+          if (!parentHybridPackage.rightChildId) {
+            newPosition = parentHybridPackage.position * 2 + 1;
+            parentPackageId = parentHybridPackage._id;
+            placedAsDirectChild = true;
+            console.log(`✓ PLACING as 4th direct sibling (RIGHT CHILD) at position ${newPosition}`);
+          } else if (!parentHybridPackage.leftChildId) {
+            newPosition = parentHybridPackage.position * 2;
+            parentPackageId = parentHybridPackage._id;
+            placedAsDirectChild = true;
+            console.log(`✓ PLACING as 4th direct sibling (LEFT CHILD - right was filled) at position ${newPosition}`);
+          } else {
+            console.log(`⚠ User is sibling #4, but parent's both children are filled - using SEQUENTIAL placement`);
+          }
         }
         // 1st, 2nd, and 5th+ siblings - use sequential placement
         else {
@@ -333,54 +351,78 @@ exports.createHybridPackage = async (req, res) => {
 
     if (!placedAsDirectChild) {
       console.log("Starting sequential placement...");
-      console.log("Searching for first package with empty child slot...");
+      console.log("Looking for first available position (filling gaps)...");
 
-      // Find the first package with an empty child slot (sorted by position ascending for BFS fill)
-      const packageWithEmptySlot = await HybridPackage.findOne({
-        $or: [
-          { leftChildId: null },
-          { rightChildId: null }
-        ]
-      })
-        .sort({ position: 1 }) // Ascending order to fill from lowest position first
-        .select('position leftChildId rightChildId userId');
+      // Get all existing positions
+      const allPackages = await HybridPackage.find().select('position');
+      const existingPositions = new Set(allPackages.map(p => p.position));
 
-      if (packageWithEmptySlot) {
-        parentPackageId = packageWithEmptySlot._id;
+      // Find the highest position
+      const highestPosition = allPackages.length > 0
+        ? Math.max(...allPackages.map(p => p.position))
+        : 0;
 
-        if (!packageWithEmptySlot.leftChildId) {
-          // Left child is empty
-          newPosition = packageWithEmptySlot.position * 2;
-          console.log(`✓ Found package at position ${packageWithEmptySlot.position} (userId: ${packageWithEmptySlot.userId}) with empty LEFT child`);
-          console.log(`Placing at position ${newPosition}`);
-        } else {
-          // Right child is empty
-          newPosition = packageWithEmptySlot.position * 2 + 1;
-          console.log(`✓ Found package at position ${packageWithEmptySlot.position} (userId: ${packageWithEmptySlot.userId}) with empty RIGHT child`);
-          console.log(`Placing at position ${newPosition}`);
-        }
-      } else {
-        // No packages with empty slots found - this shouldn't happen in a growing tree
-        console.log("⚠ No packages with empty slots found - tree might be complete or corrupted");
+      console.log(`Current highest position: ${highestPosition}`);
+      console.log(`Total packages: ${allPackages.length}`);
 
-        // Fallback: use highest position + 1
-        const highestPackage = await HybridPackage.findOne()
-          .sort({ position: -1 })
-          .select('position');
+      // Search for the first empty position that has a valid parent
+      let foundPosition = null;
+      let foundParentPackage = null;
 
-        newPosition = (highestPackage?.position || 0) + 1;
-        console.log(`Fallback to position: ${newPosition}`);
+      // Start from position 2 (position 1 is root)
+      const startPosition = existingPositions.has(1) ? 2 : 1;
 
-        if (newPosition > 1) {
-          const parentPosition = Math.floor(newPosition / 2);
-          const parentPackage = await HybridPackage.findOne({ position: parentPosition });
-          if (parentPackage) {
-            parentPackageId = parentPackage._id;
+      for (let pos = startPosition; pos <= highestPosition + 1; pos++) {
+        if (!existingPositions.has(pos)) {
+          // Position is empty, check if parent exists
+          const parentPos = Math.floor(pos / 2);
+
+          if (parentPos === 0) {
+            // This is position 1 (root)
+            foundPosition = pos;
+            foundParentPackage = null;
+            console.log(`✓ Found empty root position: ${pos}`);
+            break;
+          } else if (existingPositions.has(parentPos)) {
+            // Parent exists, check if the slot is empty
+            const parentPackage = await HybridPackage.findOne({ position: parentPos })
+              .select('position leftChildId rightChildId userId');
+
+            if (parentPackage) {
+              // Check if the appropriate child slot is empty
+              const isLeftChild = (pos % 2 === 0);
+              const slotIsEmpty = isLeftChild
+                ? !parentPackage.leftChildId
+                : !parentPackage.rightChildId;
+
+              if (slotIsEmpty) {
+                foundPosition = pos;
+                foundParentPackage = parentPackage;
+                console.log(`✓ Found empty position ${pos} (${isLeftChild ? 'LEFT' : 'RIGHT'} child of position ${parentPos}, userId: ${parentPackage.userId})`);
+                break;
+              } else {
+                console.log(`⚠ Position ${pos} is empty but parent's ${isLeftChild ? 'left' : 'right'} child slot is already filled - continuing search...`);
+              }
+            }
+          } else {
+            console.log(`⚠ Position ${pos} is empty but parent position ${parentPos} doesn't exist - skipping...`);
           }
         }
       }
 
-      console.log(`✓ SEQUENTIAL PLACEMENT at position ${newPosition} with parent: ${parentPackageId || 'none (root)'}`);
+      if (foundPosition) {
+        newPosition = foundPosition;
+        parentPackageId = foundParentPackage?._id || null;
+        console.log(`✓ SEQUENTIAL PLACEMENT at position ${newPosition}`);
+      } else {
+        // Fallback (shouldn't happen in normal operation)
+        console.log("⚠ No valid position found using gap-filling, using fallback logic");
+        newPosition = highestPosition + 1;
+        const parentPos = Math.floor(newPosition / 2);
+        const parentPkg = await HybridPackage.findOne({ position: parentPos });
+        parentPackageId = parentPkg?._id || null;
+        console.log(`Fallback to position: ${newPosition}`);
+      }
     }
 
     console.log("\n--- CREATING HYBRID PACKAGE ---");
