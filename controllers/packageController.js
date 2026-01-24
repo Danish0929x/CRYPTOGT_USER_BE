@@ -420,33 +420,21 @@ exports.createHybridPackage = async (req, res) => {
     });
 
     await newHybridPackage.save();
-    console.log("✓ Hybrid package saved successfully with ID:", newHybridPackage._id);
 
     // Update parent's left or right child reference
     if (parentPackageId) {
-      console.log("\n--- UPDATING PARENT REFERENCES ---");
       const parentPackage = await HybridPackage.findById(parentPackageId);
 
       if (newPosition % 2 === 0) {
         // Even position = left child
         parentPackage.leftChildId = newHybridPackage._id;
-        console.log(`Updated parent's LEFT child to: ${newHybridPackage._id}`);
       } else {
         // Odd position = right child
         parentPackage.rightChildId = newHybridPackage._id;
-        console.log(`Updated parent's RIGHT child to: ${newHybridPackage._id}`);
       }
 
       await parentPackage.save();
-      console.log("✓ Parent package updated successfully");
-    } else {
-      console.log("No parent package to update (root position)");
     }
-
-    console.log("\n=== CREATE HYBRID PACKAGE SUCCESS ===");
-    console.log("Package ID:", newHybridPackage._id);
-    console.log("Position:", newPosition);
-    console.log("Placement:", placedAsDirectChild ? "direct_child" : "sequential");
 
     res.status(201).json({
       success: true,
