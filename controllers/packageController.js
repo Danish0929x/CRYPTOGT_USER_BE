@@ -278,28 +278,21 @@ exports.createHybridPackage = async (req, res) => {
       console.log("Parent hybrid package found:", parentHybridPackage ? `Yes (position: ${parentHybridPackage.position})` : "No");
 
       if (parentHybridPackage) {
-        // Calculate parent's row (level) in binary tree
-        // Level = floor(log2(position)) + 1
-        const parentLevel = Math.floor(Math.log2(parentHybridPackage.position)) + 1;
-        const parentRowStart = Math.pow(2, parentLevel - 1);
-
-        console.log(`Parent level: ${parentLevel}, Parent row start position: ${parentRowStart}`);
+        console.log(`Parent position: ${parentHybridPackage.position}`);
         console.log(`Parent leftChildId: ${parentHybridPackage.leftChildId || 'null'}, rightChildId: ${parentHybridPackage.rightChildId || 'null'}`);
 
-        // Count siblings (users with same parentId) whose packages are at position >= parent's row start
-        // This includes parent's row AND all rows after/below it
+        // Count siblings (users with same parentId) who already have hybrid packages
         const siblings = await User.find({ parentId: user.parentId }).select('userId');
         const siblingUserIds = siblings.map(u => u.userId);
         console.log(`Found ${siblings.length} total siblings (users with same parentId):`, siblingUserIds);
 
-        const siblingsWithPackagesFromParentRowOnward = await HybridPackage.find({
-          userId: { $in: siblingUserIds },
-          position: { $gte: parentRowStart }
+        const siblingsWithPackages = await HybridPackage.find({
+          userId: { $in: siblingUserIds }
         });
-        const siblingCount = siblingsWithPackagesFromParentRowOnward.length;
+        const siblingCount = siblingsWithPackages.length;
 
-        console.log(`Siblings with packages from position ${parentRowStart} onwards: ${siblingCount}`);
-        console.log(`Sibling packages:`, siblingsWithPackagesFromParentRowOnward.map(p => ({ userId: p.userId, position: p.position })));
+        console.log(`Siblings with hybrid packages: ${siblingCount}`);
+        console.log(`Sibling packages:`, siblingsWithPackages.map(p => ({ userId: p.userId, position: p.position })));
 
         // 3rd sibling direct - try to fill parent's LEFT child first, then RIGHT if left is filled
         if (siblingCount === 2) {
