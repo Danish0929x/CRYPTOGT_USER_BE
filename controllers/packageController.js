@@ -10,22 +10,23 @@ const { sendHybridAmount } = require("../functions/sendHybridAmount");
 const { makeCryptoTransaction } = require("../utils/makeUSDTCryptoTransaction");
 
 // Level Configuration based on International AutoPool
+// divisions: 1 = single claim, 4 = split into 4 parts (levels 7-15)
 const LEVEL_CONFIG = {
-  1: { members: 2, percentage: 5, amount: 20, direct: 0 },
-  2: { members: 4, percentage: 5, amount: 40, direct: 0 },
-  3: { members: 8, percentage: 5, amount: 80, direct: 0 },
-  4: { members: 16, percentage: 5, amount: 160, direct: 0 },
-  5: { members: 32, percentage: 5, amount: 320, direct: 1 },
-  6: { members: 64, percentage: 5, amount: 640, direct: 1 },
-  7: { members: 128, percentage: 5, amount: 1280, direct: 2 },
-  8: { members: 256, percentage: 5, amount: 2560, direct: 2 },
-  9: { members: 512, percentage: 5, amount: 5120, direct: 3 },
-  10: { members: 1024, percentage: 5, amount: 10240, direct: 3 },
-  11: { members: 2048, percentage: 3, amount: 20460, direct: 4 },
-  12: { members: 4096, percentage: 3, amount: 40960, direct: 4 },
-  13: { members: 8192, percentage: 3, amount: 81920, direct: 5 },
-  14: { members: 16384, percentage: 3, amount: 163840, direct: 10 },
-  15: { members: 32768, percentage: 3, amount: 327680, direct: 15 },
+  1: { members: 2, percentage: 5, amount: 20, direct: 0, divisions: 1 },
+  2: { members: 4, percentage: 5, amount: 40, direct: 0, divisions: 1 },
+  3: { members: 8, percentage: 5, amount: 80, direct: 0, divisions: 1 },
+  4: { members: 16, percentage: 5, amount: 160, direct: 0, divisions: 1 },
+  5: { members: 32, percentage: 5, amount: 320, direct: 1, divisions: 1 },
+  6: { members: 64, percentage: 5, amount: 640, direct: 1, divisions: 1 },
+  7: { members: 128, percentage: 5, amount: 1280, direct: 2, divisions: 4 },
+  8: { members: 256, percentage: 5, amount: 2560, direct: 2, divisions: 4 },
+  9: { members: 512, percentage: 5, amount: 5120, direct: 3, divisions: 4 },
+  10: { members: 1024, percentage: 5, amount: 10240, direct: 3, divisions: 4 },
+  11: { members: 2048, percentage: 3, amount: 20460, direct: 4, divisions: 4 },
+  12: { members: 4096, percentage: 3, amount: 40960, direct: 4, divisions: 4 },
+  13: { members: 8192, percentage: 3, amount: 81920, direct: 5, divisions: 4 },
+  14: { members: 16384, percentage: 3, amount: 163840, direct: 10, divisions: 4 },
+  15: { members: 32768, percentage: 3, amount: 327680, direct: 15, divisions: 4 },
 };
 
 // Helper function to count total members under a user in the tree
@@ -1026,13 +1027,26 @@ const verifyTreeStructure = async (packageNode, targetDepth, currentDepth = 1, e
 exports.claimLevelReward = async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { level } = req.body;
+    const { level, division } = req.body;
 
     if (!level || level < 1 || level > 15) {
       return res.status(400).json({
         success: false,
         message: "Invalid level. Level must be between 1 and 15.",
       });
+    }
+
+    const levelConfig = LEVEL_CONFIG[level];
+    const hasDivisions = levelConfig.divisions > 1;
+
+    // Validate division parameter for divided levels (7-15)
+    if (hasDivisions) {
+      if (!division || division < 1 || division > levelConfig.divisions) {
+        return res.status(400).json({
+          success: false,
+          message: `Level ${level} requires a division (1-${levelConfig.divisions}).`,
+        });
+      }
     }
 
     // Get user's hybrid package
@@ -1044,13 +1058,32 @@ exports.claimLevelReward = async (req, res) => {
       });
     }
 
-    // Check if level already claimed
-    const existingLevel = hybridPackage.levels.find((l) => l.level === level);
+    // Check if already claimed
+    // For non-divided levels: match by level only
+    // For divided levels: match by level + division
+    const existingLevel = hasDivisions
+      ? hybridPackage.levels.find((l) => l.level === level && l.division === division)
+      : hybridPackage.levels.find((l) => l.level === level && !l.division);
+
     if (existingLevel && existingLevel.status === "Claimed") {
+      const label = hasDivisions ? `Level ${level} Part ${division}` : `Level ${level}`;
       return res.status(400).json({
         success: false,
-        message: `Level ${level} has already been claimed`,
+        message: `${label} has already been claimed`,
       });
+    }
+
+    // For divided levels, ensure previous division is claimed first (sequential claiming)
+    if (hasDivisions && division > 1) {
+      const prevDivision = hybridPackage.levels.find(
+        (l) => l.level === level && l.division === (division - 1) && l.status === "Claimed"
+      );
+      if (!prevDivision) {
+        return res.status(400).json({
+          success: false,
+          message: `You must claim Level ${level} Part ${division - 1} before claiming Part ${division}.`,
+        });
+      }
     }
 
     // Get user's wallet to send crypto
@@ -1063,12 +1096,9 @@ exports.claimLevelReward = async (req, res) => {
     }
 
     // Check direct referral requirement for levels > 4
-    const levelConfig = LEVEL_CONFIG[level];
     if (level > 4 && levelConfig.direct > 0) {
       try {
-        // Count direct referrals (users who have this userId as parentId)
         const directCount = await User.countDocuments({ parentId: userId });
-
         if (directCount < levelConfig.direct) {
           return res.status(400).json({
             success: false,
@@ -1085,55 +1115,54 @@ exports.claimLevelReward = async (req, res) => {
       }
     }
 
-    // Calculate reward amount: percentage of amount from LEVEL_CONFIG
-    const rewardAmount = (levelConfig.amount * levelConfig.percentage) / 100;
+    // Calculate reward amount
+    // For divided levels: reward is split equally across divisions (1/4 each)
+    const totalReward = (levelConfig.amount * levelConfig.percentage) / 100;
+    const rewardAmount = hasDivisions ? totalReward / levelConfig.divisions : totalReward;
 
-    console.log(`Claiming level ${level} for user ${userId}, base reward amount: ${rewardAmount}`);
+    const claimLabel = hasDivisions ? `level ${level} part ${division}` : `level ${level}`;
+    console.log(`Claiming ${claimLabel} for user ${userId}, reward amount: ${rewardAmount}`);
 
-    // For levels 1-4, check if double bonus condition is met based on level-specific requirements
+    // For levels 1-4, check double bonus
     let finalRewardAmount = rewardAmount;
     let isDoubleBonus = false;
 
     if (level >= 1 && level <= 4) {
       isDoubleBonus = await checkLevelDoubleBonusCondition(hybridPackage, level);
-
       if (isDoubleBonus) {
         finalRewardAmount = rewardAmount * 2;
-        console.log(`✓✓✓ DOUBLE BONUS APPLIED for Level ${level}! Reward doubled from ${rewardAmount} to ${finalRewardAmount} USDT`);
-      } else {
-        console.log(`✗ Double bonus NOT eligible for Level ${level}`);
+        console.log(`DOUBLE BONUS APPLIED for Level ${level}! Reward: ${finalRewardAmount} USDT`);
       }
     }
 
     console.log(`Final reward amount: ${finalRewardAmount} USDT`);
 
-    // For levels 1-4, call makeCryptoTransaction with full amount
+    // Process payment based on level range
     let txnHash = null;
+
     if (level >= 1 && level <= 4) {
+      // Levels 1-4: 100% crypto
       try {
         txnHash = await makeCryptoTransaction(finalRewardAmount, user.walletAddress);
-        console.log(`Crypto transaction successful for level ${level}: ${txnHash}`);
+        console.log(`Crypto transaction successful for ${claimLabel}: ${txnHash}`);
       } catch (cryptoError) {
-        console.error(`Crypto transaction failed for level ${level}:`, cryptoError);
+        console.error(`Crypto transaction failed for ${claimLabel}:`, cryptoError);
         return res.status(500).json({
           success: false,
           message: "Failed to process crypto transaction",
           error: cryptoError.message,
         });
       }
-    }
-
-    // For levels 5 and 6, split distribution: 50% crypto + 30% wallet balance
-    if (level === 5 || level === 6) {
+    } else if (level === 5 || level === 6) {
+      // Levels 5-6: 50% crypto + 30% wallet
       const cryptoAmount = (rewardAmount * 50) / 100;
       const walletAmount = (rewardAmount * 30) / 100;
 
-      // Send 50% via makeCryptoTransaction
       try {
         txnHash = await makeCryptoTransaction(cryptoAmount, user.walletAddress);
-        console.log(`Crypto transaction successful for level ${level}: ${txnHash}`);
+        console.log(`Crypto transaction successful for ${claimLabel}: ${txnHash}`);
       } catch (cryptoError) {
-        console.error(`Crypto transaction failed for level ${level}:`, cryptoError);
+        console.error(`Crypto transaction failed for ${claimLabel}:`, cryptoError);
         return res.status(500).json({
           success: false,
           message: "Failed to process crypto transaction",
@@ -1141,7 +1170,6 @@ exports.claimLevelReward = async (req, res) => {
         });
       }
 
-      // Add 30% to USDTBalance via performWalletTransaction
       try {
         await performWalletTransaction(
           userId,
@@ -1150,18 +1178,52 @@ exports.claimLevelReward = async (req, res) => {
           `Level ${level} reward (30% wallet distribution)`,
           "Completed"
         );
-        console.log(`Level ${level} wallet distribution successful: ${walletAmount} USDT added to USDTBalance`);
+        console.log(`${claimLabel} wallet distribution: ${walletAmount} USDT added to USDTBalance`);
       } catch (walletError) {
-        console.error(`Level ${level} wallet distribution failed:`, walletError);
+        console.error(`${claimLabel} wallet distribution failed:`, walletError);
         return res.status(500).json({
           success: false,
-          message: `Failed to distribute level ${level} reward to wallet`,
+          message: `Failed to distribute ${claimLabel} reward to wallet`,
+          error: walletError.message,
+        });
+      }
+    } else if (level >= 7 && level <= 15) {
+      // Levels 7-15 (divided): 50% crypto + 30% wallet per division
+      const cryptoAmount = (finalRewardAmount * 50) / 100;
+      const walletAmount = (finalRewardAmount * 30) / 100;
+
+      try {
+        txnHash = await makeCryptoTransaction(cryptoAmount, user.walletAddress);
+        console.log(`Crypto transaction successful for ${claimLabel}: ${txnHash}`);
+      } catch (cryptoError) {
+        console.error(`Crypto transaction failed for ${claimLabel}:`, cryptoError);
+        return res.status(500).json({
+          success: false,
+          message: "Failed to process crypto transaction",
+          error: cryptoError.message,
+        });
+      }
+
+      try {
+        await performWalletTransaction(
+          userId,
+          walletAmount,
+          "USDTBalance",
+          `Level ${level} Part ${division} reward (30% wallet distribution)`,
+          "Completed"
+        );
+        console.log(`${claimLabel} wallet distribution: ${walletAmount} USDT added to USDTBalance`);
+      } catch (walletError) {
+        console.error(`${claimLabel} wallet distribution failed:`, walletError);
+        return res.status(500).json({
+          success: false,
+          message: `Failed to distribute ${claimLabel} reward to wallet`,
           error: walletError.message,
         });
       }
     }
 
-    // Update the level in the hybrid package
+    // Save to DB
     if (existingLevel) {
       existingLevel.status = "Claimed";
       existingLevel.claimedAt = new Date();
@@ -1172,6 +1234,7 @@ exports.claimLevelReward = async (req, res) => {
     } else {
       hybridPackage.levels.push({
         level,
+        division: hasDivisions ? division : null,
         status: "Claimed",
         rewardAmount: finalRewardAmount,
         achievedAt: new Date(),
@@ -1180,7 +1243,6 @@ exports.claimLevelReward = async (req, res) => {
       });
     }
 
-    // Save the hybrid package
     await hybridPackage.save();
 
     res.status(200).json({
@@ -1190,6 +1252,7 @@ exports.claimLevelReward = async (req, res) => {
         : "Reward claimed successfully",
       data: {
         level,
+        division: hasDivisions ? division : null,
         rewardAmount: finalRewardAmount,
         doubleBonus: isDoubleBonus,
         txnHash: txnHash || null,

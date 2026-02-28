@@ -52,6 +52,10 @@ const hybridPackageSchema = new mongoose.Schema(
           type: Number,
           required: true,
         },
+        division: {
+          type: Number,
+          default: null, // null for levels 1-6, 1-4 for levels 7-15
+        },
         status: {
           type: String,
           enum: ["Pending", "Achieved", "Claimed"],
