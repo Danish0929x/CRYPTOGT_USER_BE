@@ -547,6 +547,21 @@ exports.getHybridPackageByUserId = async (req, res) => {
     // Calculate total investment in Hybrid packages (fixed 10 USDT per package)
     const totalHybridInvestment = hybridPackages.length * 10;
 
+    // Count direct hybrid members: users with this userId as parentId who have hybrid packages
+    let directHybridCount = 0;
+    try {
+      const directUsers = await User.find({ parentId: userId }).select('userId');
+      const directUserIds = directUsers.map(u => u.userId);
+
+      if (directUserIds.length > 0) {
+        directHybridCount = await HybridPackage.countDocuments({
+          userId: { $in: directUserIds }
+        });
+      }
+    } catch (countError) {
+      // Continue without direct count if error occurs
+    }
+
     // Extract claimed levels from packages and check double bonus eligibility for each level
     const claimedLevels = new Set();
     const levelDetails = [];
@@ -587,6 +602,7 @@ exports.getHybridPackageByUserId = async (req, res) => {
       message: "Hybrid packages retrieved successfully",
       count: hybridPackages.length,
       totalInvestment: totalHybridInvestment,
+      directHybridCount, // Direct members with hybrid packages
       claimedLevels: Array.from(claimedLevels),
       levels: levelDetails,
       data: packagesWithParentId,
@@ -1088,21 +1104,23 @@ exports.claimLevelReward = async (req, res) => {
       });
     }
 
-    // Check direct referral requirement for levels > 4
+    // Check direct referral requirement for levels > 4 (only direct members with a hybrid package)
     if (level > 4 && levelConfig.direct > 0) {
       try {
-        const directCount = await User.countDocuments({ parentId: userId });
+        const directUsers = await User.find({ parentId: userId }).select("userId");
+        const directUserIds = directUsers.map((u) => u.userId);
+        const directCount = await HybridPackage.countDocuments({ userId: { $in: directUserIds } });
         if (directCount < levelConfig.direct) {
           return res.status(400).json({
             success: false,
-            message: `Insufficient direct referrals. Level ${level} requires ${levelConfig.direct} direct referrals, but you have ${directCount}.`,
+            message: `Insufficient direct hybrid referrals. Level ${level} requires ${levelConfig.direct} direct members with a hybrid package, but you have ${directCount}.`,
           });
         }
       } catch (error) {
-        console.error("Error checking direct referrals:", error);
+        console.error("Error checking direct hybrid referrals:", error);
         return res.status(500).json({
           success: false,
-          message: "Error verifying direct referral requirement",
+          message: "Error verifying direct hybrid referral requirement",
           error: error.message,
         });
       }
