@@ -8,6 +8,8 @@ const Assets = require("../models/Assets");
 const { makeCryptoTransaction } = require("../utils/makeCryptoTransaction");
 const { makeCryptoTransaction: makeUSDTCryptoTransaction } = require("../utils/makeUSDTCryptoTransaction");
 const Package = require("../models/Packages");
+const WithdrawOtp = require("../models/WithdrawOtp");
+const { sendOTP, verifyOTP } = require("../utils/smsService");
 const axios = require("axios");
 require("dotenv").config();
 
@@ -223,15 +225,82 @@ const payout = async (transaction) => {
 };
 
 /**
+ * Send OTP for Hybrid Package Withdrawal
+ * Sends OTP to user's registered phone number via 2Factor.in
+ */
+const sendWithdrawOTP = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    // 1. Find user and validate phone number
+    const user = await User.findOne({ userId });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    if (!user.phone) {
+      return res.status(400).json({
+        success: false,
+        message: "Phone number not registered. Please update your profile first.",
+      });
+    }
+
+    // 2. Check for existing recent OTP (prevent spam, 60 second cooldown)
+    const recentOtp = await WithdrawOtp.findOne({
+      userId,
+      purpose: "withdrawHybrid",
+      createdAt: { $gte: new Date(Date.now() - 60 * 1000) },
+    });
+
+    if (recentOtp) {
+      return res.status(429).json({
+        success: false,
+        message: "OTP already sent. Please wait 60 seconds before requesting again.",
+      });
+    }
+
+    // 3. Send OTP via 2Factor.in
+    const phone = user.phone.startsWith("91") ? user.phone : `91${user.phone}`;
+    const sessionId = await sendOTP(phone);
+
+    // 4. Store session ID in DB (remove old ones for this user)
+    await WithdrawOtp.deleteMany({ userId, purpose: "withdrawHybrid" });
+    await WithdrawOtp.create({
+      userId,
+      sessionId,
+      purpose: "withdrawHybrid",
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "OTP sent successfully to your registered phone number",
+      data: {
+        phone: user.phone.slice(-4).padStart(user.phone.length, "*"),
+      },
+    });
+  } catch (error) {
+    console.error("Send Withdraw OTP error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to send OTP. Please try again.",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+/**
  * Withdraw Hybrid Package
  * Distributes 10 USDT to real wallet, 10 USDT to retopup wallet, 10 USDT (900 CGT) to CGT Homes
  */
 const withdrawHybrid = async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { packageId } = req.body;
+    const { packageId, otp } = req.body;
 
-    // 1. Validate packageId
+    // 1. Validate packageId and OTP
     if (!packageId) {
       return res.status(400).json({
         success: false,
@@ -239,7 +308,39 @@ const withdrawHybrid = async (req, res) => {
       });
     }
 
-    // 2. Find user and check CGT Homes connection
+    if (!otp) {
+      return res.status(400).json({
+        success: false,
+        message: "OTP is required for withdrawal",
+      });
+    }
+
+    // 2. Verify OTP via 2Factor.in
+    const otpRecord = await WithdrawOtp.findOne({
+      userId,
+      purpose: "withdrawHybrid",
+      verified: false,
+    });
+
+    if (!otpRecord) {
+      return res.status(400).json({
+        success: false,
+        message: "No OTP request found. Please request a new OTP.",
+      });
+    }
+
+    const isOtpValid = await verifyOTP(otpRecord.sessionId, otp);
+    if (!isOtpValid) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired OTP. Please try again.",
+      });
+    }
+
+    // Mark OTP as verified and clean up
+    await WithdrawOtp.deleteMany({ userId, purpose: "withdrawHybrid" });
+
+    // 3. Find user and check CGT Homes connection
     const user = await User.findOne({ userId });
     if (!user) {
       return res.status(404).json({
@@ -635,6 +736,7 @@ const withdrawHybridBalance = async (req, res) => {
 
 module.exports = {
   withdrawUSDT,
+  sendWithdrawOTP,
   withdrawHybrid,
   getHybridWithdrawalHistory,
   withdrawHybridBalance,
