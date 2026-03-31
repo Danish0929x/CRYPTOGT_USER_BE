@@ -39,6 +39,8 @@ app.use('/api/withdraw', require('./routes/withdrawRoutes'));
 
 app.use('/api/autopool', require('./routes/autopoolRoutes'));
 
+app.use('/api/matrix', require('./routes/matrixRoutes'));
+
 app.use('/api/cgthomes', require('./routes/cgtHomesRoutes'));
 
 

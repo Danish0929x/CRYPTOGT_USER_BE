@@ -8,6 +8,7 @@ const { handleDirectMembers } = require("../functions/checkProductVoucher");
 const User = require("../models/User");
 const { sendHybridAmount } = require("../functions/sendHybridAmount");
 const { makeCryptoTransaction } = require("../utils/makeUSDTCryptoTransaction");
+const { enterMatrix } = require("./matrixController");
 
 // Level Configuration based on International AutoPool
 // divisions: 1 = single claim, 4 = split into 4 parts (levels 7-15)
@@ -462,6 +463,27 @@ exports.createHybridPackage = async (req, res) => {
     console.log("Position:", newPosition);
     console.log("Placement:", placedAsDirectChild ? "direct_child" : "sequential");
 
+    // Check if the sponsor (parentId) now has 4 direct hybrid referrals → auto-enter into matrix
+    if (user.parentId) {
+      try {
+        const sponsorDirectUsers = await User.find({ parentId: user.parentId }).select("userId");
+        const sponsorDirectUserIds = sponsorDirectUsers.map((u) => u.userId);
+        const sponsorDirectHybridCount = await HybridPackage.countDocuments({
+          userId: { $in: sponsorDirectUserIds },
+        });
+
+        console.log(`Sponsor ${user.parentId} now has ${sponsorDirectHybridCount} direct hybrid referrals`);
+
+        if (sponsorDirectHybridCount >= 4) {
+          const matrixResult = await enterMatrix(user.parentId);
+          console.log("Matrix auto-entry result:", matrixResult.message);
+        }
+      } catch (matrixError) {
+        // Matrix entry failure should not block hybrid package creation
+        console.error("Matrix auto-entry error (non-blocking):", matrixError.message);
+      }
+    }
+
     res.status(201).json({
       success: true,
       message: "Hybrid package created successfully",
@@ -562,18 +584,12 @@ exports.getHybridPackageByUserId = async (req, res) => {
       // Continue without direct count if error occurs
     }
 
-    // Extract claimed levels from packages and check double bonus eligibility for each level
+    // Extract claimed levels from packages
     const claimedLevels = new Set();
     const levelDetails = [];
 
     if (hybridPackages.length > 0) {
       const primaryPackage = hybridPackages[0];
-
-      // Check double bonus eligibility for each level (1-4)
-      const doubleEligibility = {};
-      for (let lvl = 1; lvl <= 4; lvl++) {
-        doubleEligibility[lvl] = await verifyTreeStructure(primaryPackage, lvl);
-      }
 
       if (primaryPackage.levels && Array.isArray(primaryPackage.levels)) {
         primaryPackage.levels.forEach((level) => {
@@ -584,7 +600,6 @@ exports.getHybridPackageByUserId = async (req, res) => {
               status: level.status,
               rewardAmount: level.rewardAmount,
               claimedAt: level.claimedAt,
-              eligibleForDoubleBonus: doubleEligibility[level.level] || false, // Add flag for each level
             });
           }
         });
@@ -829,210 +844,6 @@ exports.getHybridAutopoolTree = async (req, res) => {
   }
 };
 
-// Helper function to check if both children share the same parent (for double bonus)
-const checkDoubleBonusCondition = async (hybridPackage) => {
-  try {
-    // Both children must exist
-    if (!hybridPackage.leftChildId || !hybridPackage.rightChildId) {
-      console.log('Double bonus check: Missing child packages');
-      return false;
-    }
-
-    // Fetch both child packages to get their userIds
-    const [leftChild, rightChild] = await Promise.all([
-      HybridPackage.findById(hybridPackage.leftChildId).select('userId'),
-      HybridPackage.findById(hybridPackage.rightChildId).select('userId')
-    ]);
-
-    if (!leftChild || !rightChild) {
-      console.log('Double bonus check: Child packages not found');
-      return false;
-    }
-
-    console.log(`Double bonus check: Left child userId: ${leftChild.userId}, Right child userId: ${rightChild.userId}`);
-
-    // Fetch both users to get their parentIds
-    const [leftChildUser, rightChildUser] = await Promise.all([
-      User.findOne({ userId: leftChild.userId }).select('parentId'),
-      User.findOne({ userId: rightChild.userId }).select('parentId')
-    ]);
-
-    if (!leftChildUser || !rightChildUser) {
-      console.log('Double bonus check: Child users not found');
-      return false;
-    }
-
-    console.log(`Double bonus check: Left child parentId: ${leftChildUser.parentId}, Right child parentId: ${rightChildUser.parentId}`);
-
-    // Check if both children have the same parentId (they should have current user's userId as parentId)
-    if (!leftChildUser.parentId || !rightChildUser.parentId ||
-        leftChildUser.parentId !== rightChildUser.parentId) {
-      console.log('Double bonus check: Different parentIds or missing parentId');
-      return false;
-    }
-
-    // Verify both children's parentId matches the current user
-    const currentUserId = hybridPackage.userId;
-    if (leftChildUser.parentId !== currentUserId || rightChildUser.parentId !== currentUserId) {
-      console.log(`Double bonus check: Children's parentId (${leftChildUser.parentId}) does not match current user (${currentUserId})`);
-      return false;
-    }
-
-    // ✓ LEVEL 1 CONDITION MET: Both direct children exist with same parentId
-    console.log(`✓ LEVEL 1 CONDITION MET! Both children have parentId: ${leftChildUser.parentId}`);
-
-    // Now check LEVEL 2: All 4 grandchildren must exist (left-left, left-right, right-left, right-right)
-    // and all their parentIds must be the userIds from LEVEL 1 (left and right children)
-    const [ll, lr, rl, rr] = await Promise.all([
-      HybridPackage.findById(leftChild.leftChildId).select('userId'),
-      HybridPackage.findById(leftChild.rightChildId).select('userId'),
-      HybridPackage.findById(rightChild.leftChildId).select('userId'),
-      HybridPackage.findById(rightChild.rightChildId).select('userId')
-    ]);
-
-    // All 4 grandchildren must exist
-    if (!ll || !lr || !rl || !rr) {
-      console.log('Double bonus check: Missing grandchildren packages');
-      return false;
-    }
-
-    console.log(`Level 2 packages found: LL=${ll.userId}, LR=${lr.userId}, RL=${rl.userId}, RR=${rr.userId}`);
-
-    // Fetch users to verify their parentIds
-    const [llUser, lrUser, rlUser, rrUser] = await Promise.all([
-      User.findOne({ userId: ll.userId }).select('parentId'),
-      User.findOne({ userId: lr.userId }).select('parentId'),
-      User.findOne({ userId: rl.userId }).select('parentId'),
-      User.findOne({ userId: rr.userId }).select('parentId')
-    ]);
-
-    if (!llUser || !lrUser || !rlUser || !rrUser) {
-      console.log('Double bonus check: Grandchild users not found');
-      return false;
-    }
-
-    // Verify ALL Level 2 users have correct parentIds from Level 1
-    // Left subtree (LL and LR) should have leftChild.userId as parentId
-    // Right subtree (RL and RR) should have rightChild.userId as parentId
-    if (llUser.parentId !== leftChild.userId || lrUser.parentId !== leftChild.userId) {
-      console.log(`Double bonus check: Left subtree parentId mismatch. Expected ${leftChild.userId}, got LL=${llUser.parentId}, LR=${lrUser.parentId}`);
-      return false;
-    }
-
-    if (rlUser.parentId !== rightChild.userId || rrUser.parentId !== rightChild.userId) {
-      console.log(`Double bonus check: Right subtree parentId mismatch. Expected ${rightChild.userId}, got RL=${rlUser.parentId}, RR=${rrUser.parentId}`);
-      return false;
-    }
-
-    console.log(`✓✓ FULL LEVEL 2 STRUCTURE VERIFIED! All parentIds correctly match Level 1 userIds`);
-    console.log(`Left subtree parentId: ${leftChild.userId}`);
-    console.log(`Right subtree parentId: ${rightChild.userId}`);
-
-    return true;
-
-  } catch (error) {
-    console.error('Error checking double bonus condition:', error);
-    return false;
-  }
-};
-
-// Generic level-specific double bonus check using recursion
-// Level 1: 2 nodes (left, right) must have same parentId
-// Level 2: 4 nodes at depth 2 must have correct parentIds
-// Level 3: 8 nodes at depth 3 must have correct parentIds
-// Level 4: 16 nodes at depth 4 must have correct parentIds
-const checkLevelDoubleBonusCondition = async (hybridPackage, targetLevel) => {
-  try {
-    console.log(`\n🔍 Checking Level ${targetLevel} Double Bonus Condition...`);
-
-    if (!hybridPackage.leftChildId || !hybridPackage.rightChildId) {
-      console.log(`✗ Level ${targetLevel}: Missing direct children`);
-      return false;
-    }
-
-    // Recursively verify tree structure and parentIds at each level
-    const isValid = await verifyTreeStructure(hybridPackage, targetLevel);
-
-    if (isValid) {
-      console.log(`✓ Level ${targetLevel}: All ${Math.pow(2, targetLevel)} nodes verified with correct parentIds`);
-    } else {
-      console.log(`✗ Level ${targetLevel}: Tree structure verification failed`);
-    }
-
-    return isValid;
-
-  } catch (error) {
-    console.error(`Error checking level ${targetLevel} double bonus condition:`, error);
-    return false;
-  }
-};
-
-// Recursive function to verify tree structure for a given level
-const verifyTreeStructure = async (packageNode, targetDepth, currentDepth = 1, expectedParentId = null) => {
-  try {
-    // Base case: reached target depth
-    if (currentDepth > targetDepth) {
-      return true;
-    }
-
-    // Verify parentId if this is not the root node
-    if (expectedParentId && packageNode.parentId !== expectedParentId) {
-      return false;
-    }
-
-    // Get children
-    if (!packageNode.leftChildId || !packageNode.rightChildId) {
-      return false;
-    }
-
-    const [leftChild, rightChild] = await Promise.all([
-      HybridPackage.findById(packageNode.leftChildId).select('userId parentId leftChildId rightChildId'),
-      HybridPackage.findById(packageNode.rightChildId).select('userId parentId leftChildId rightChildId')
-    ]);
-
-    if (!leftChild || !rightChild) {
-      return false;
-    }
-
-    // For level 1, verify both children have the same parentId (from same sponsor)
-    if (currentDepth === 1) {
-      const [leftUser, rightUser] = await Promise.all([
-        User.findOne({ userId: leftChild.userId }).select('parentId'),
-        User.findOne({ userId: rightChild.userId }).select('parentId')
-      ]);
-
-      if (!leftUser || !rightUser || leftUser.parentId !== rightUser.parentId) {
-        return false;
-      }
-    }
-
-    // For levels > 1, recursively verify children point to correct parents
-    if (currentDepth < targetDepth) {
-      // Get parent IDs from users
-      const [leftUser, rightUser] = await Promise.all([
-        User.findOne({ userId: leftChild.userId }).select('parentId'),
-        User.findOne({ userId: rightChild.userId }).select('parentId')
-      ]);
-
-      if (!leftUser || !rightUser) {
-        return false;
-      }
-
-      // Recursively verify left and right subtrees with their userIds as expected parents
-      const leftValid = await verifyTreeStructure(leftChild, targetDepth, currentDepth + 1, leftUser.parentId);
-      const rightValid = await verifyTreeStructure(rightChild, targetDepth, currentDepth + 1, rightUser.parentId);
-
-      return leftValid && rightValid;
-    }
-
-    return true;
-
-  } catch (error) {
-    console.error('Error verifying tree structure:', error);
-    return false;
-  }
-};
-
 exports.claimLevelReward = async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -1134,17 +945,7 @@ exports.claimLevelReward = async (req, res) => {
     const claimLabel = hasDivisions ? `level ${level} part ${division}` : `level ${level}`;
     console.log(`Claiming ${claimLabel} for user ${userId}, reward amount: ${rewardAmount}`);
 
-    // For levels 1-4, check double bonus
     let finalRewardAmount = rewardAmount;
-    let isDoubleBonus = false;
-
-    if (level >= 1 && level <= 4) {
-      isDoubleBonus = await checkLevelDoubleBonusCondition(hybridPackage, level);
-      if (isDoubleBonus) {
-        finalRewardAmount = rewardAmount * 2;
-        console.log(`DOUBLE BONUS APPLIED for Level ${level}! Reward: ${finalRewardAmount} USDT`);
-      }
-    }
 
     console.log(`Final reward amount: ${finalRewardAmount} USDT`);
 
@@ -1258,14 +1059,11 @@ exports.claimLevelReward = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: isDoubleBonus
-        ? "Reward claimed successfully with double bonus!"
-        : "Reward claimed successfully",
+      message: "Reward claimed successfully",
       data: {
         level,
         division: hasDivisions ? division : null,
         rewardAmount: finalRewardAmount,
-        doubleBonus: isDoubleBonus,
         txnHash: txnHash || null,
       },
     });
