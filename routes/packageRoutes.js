@@ -12,5 +12,6 @@ router.get('/get-direct-hybrid-packages', authMiddleware, packageController.getD
 router.get('/get-user-levels', authMiddleware, packageController.getUserLevels);
 router.get('/get-hybrid-autopool-tree', authMiddleware, packageController.getHybridAutopoolTree);
 router.post('/claim-level-reward', authMiddleware, packageController.claimLevelReward);
+router.get('/get-matrix-tree-hybrid', authMiddleware, packageController.getMatrixTreeFromHybrid);
 
 module.exports = router;

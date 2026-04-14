@@ -22,6 +22,10 @@ const walletSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  retopupBalance: {
+    type: Number,
+    default: 0,
+  },
 }, { timestamps: true });
 
 // Round to 5 decimals before saving
@@ -37,6 +41,7 @@ walletSchema.pre('save', function (next) {
   this.autopoolBalance = round(this.autopoolBalance);
   this.utilityBalance = round(this.utilityBalance);
   this.hybridBalance = round(this.hybridBalance);
+  this.retopupBalance = round(this.retopupBalance);
 
   next();
 });

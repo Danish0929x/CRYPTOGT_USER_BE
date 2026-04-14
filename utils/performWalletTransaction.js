@@ -30,7 +30,7 @@ async function performWalletTransaction(
   if (isNaN(amt)) throw new Error("Invalid amount");
 
   // Validate wallet name against current model
-  if (!["USDTBalance", "autopoolBalance", "utilityBalance", "hybridBalance"].includes(walletName)) {
+  if (!["USDTBalance", "autopoolBalance", "utilityBalance", "hybridBalance", "retopupBalance"].includes(walletName)) {
     throw new Error("Invalid wallet name. Must be 'USDTBalance', 'autopoolBalance', 'utilityBalance' or 'hybridBalance'");
   }
 

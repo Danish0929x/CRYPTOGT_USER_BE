@@ -2,275 +2,298 @@ const MatrixPackage = require("../models/MatrixPackage");
 const HybridPackage = require("../models/HybridPackage");
 const User = require("../models/User");
 
-// Auto-enter a user into the matrix tree
-// Called when a sponsor reaches 4 direct hybrid packages
+// Children required per part
+const CHILDREN_REQUIRED = { 1: 2, 2: 3, 3: 4 };
+
+// Stage config matching frontend HYBRID_MATRICES
+const STAGE_CONFIG = [
+  { hm: 1, part: 1, entry: 5, income: 2 },
+  { hm: 1, part: 2, entry: 8, income: 12 },
+  { hm: 1, part: 3, entry: 20, income: 100 },
+  { hm: 2, part: 1, entry: 60, income: 20 },
+  { hm: 2, part: 2, entry: 100, income: 100 },
+  { hm: 2, part: 3, entry: 300, income: 1500 },
+  { hm: 3, part: 1, entry: 900, income: 300 },
+  { hm: 3, part: 2, entry: 1500, income: 2000 },
+  { hm: 3, part: 3, entry: 4000, income: 22000 },
+  { hm: 4, part: 1, entry: 10000, income: 5000 },
+  { hm: 4, part: 2, entry: 15000, income: 20000 },
+  { hm: 4, part: 3, entry: 40000, income: 220000 },
+  { hm: 5, part: 1, entry: 100000, income: 50000 },
+  { hm: 5, part: 2, entry: 150000, income: 200000 },
+  { hm: 5, part: 3, entry: 400000, income: 3200000 },
+];
+
+// Get next stage after current
+const getNextStage = (hm, part) => {
+  if (part < 3) return { hm, part: part + 1 };
+  if (hm < 5) return { hm: hm + 1, part: 1 };
+  return null;
+};
+
+// User enters matrix — starts at HM1 P1
+// Called when a user gets 2 direct hybrid referrals (matrixLeft + matrixRight filled)
+// Only the qualifying user enters — placed sequentially, auto-assigned as child to
+// the earliest parent who still needs children in HM1-P1
 const enterMatrix = async (userId) => {
   try {
-    console.log("=== MATRIX AUTO-ENTRY START ===");
-    console.log("User ID:", userId);
+    const existing = await MatrixPackage.findOne({ userId, hm: 1, part: 1 });
+    if (existing) return { success: false, message: "Already in matrix", data: existing };
 
-    // Check if user already has a matrix entry
-    const existingMatrix = await MatrixPackage.findOne({ userId });
-    if (existingMatrix) {
-      console.log("User already in matrix, skipping");
-      return { success: false, message: "User already in matrix" };
-    }
+    // placeInStage with skipAutoAssign=false → auto-assigns as child to earliest parent needing children
+    const result = await placeInStage(userId, 1, 1);
+    if (!result.success) return result;
 
-    // Verify user actually has 4+ direct hybrid referrals
-    const directUsers = await User.find({ parentId: userId }).select("userId");
-    const directUserIds = directUsers.map((u) => u.userId);
-    const directHybridCount = await HybridPackage.countDocuments({
-      userId: { $in: directUserIds },
-    });
-
-    if (directHybridCount < 4) {
-      console.log(
-        `User has ${directHybridCount} direct hybrid referrals, need 4`
-      );
-      return {
-        success: false,
-        message: `Need 4 direct hybrid referrals, have ${directHybridCount}`,
-      };
-    }
-
-    // Find placement position in the matrix tree (sequential, left-to-right)
-    let newPosition = null;
-    let parentPackageId = null;
-
-    const allPackages = await MatrixPackage.find().select("position");
-    const existingPositions = new Set(allPackages.map((p) => p.position));
-    const highestPosition =
-      allPackages.length > 0 ? Math.max(...allPackages.map((p) => p.position)) : 0;
-
-    // Start from position 1 (root) or 2 if root exists
-    const startPosition = existingPositions.has(1) ? 2 : 1;
-
-    for (let pos = startPosition; pos <= highestPosition + 1; pos++) {
-      if (!existingPositions.has(pos)) {
-        const parentPos = Math.floor(pos / 2);
-
-        if (parentPos === 0) {
-          // Root position
-          newPosition = pos;
-          parentPackageId = null;
-          console.log(`Found empty root position: ${pos}`);
-          break;
-        } else if (existingPositions.has(parentPos)) {
-          const parentPackage = await MatrixPackage.findOne({
-            position: parentPos,
-          }).select("position leftChildId rightChildId");
-
-          if (parentPackage) {
-            const isLeftChild = pos % 2 === 0;
-            const slotIsEmpty = isLeftChild
-              ? !parentPackage.leftChildId
-              : !parentPackage.rightChildId;
-
-            if (slotIsEmpty) {
-              newPosition = pos;
-              parentPackageId = parentPackage._id;
-              console.log(
-                `Found empty position ${pos} (${isLeftChild ? "LEFT" : "RIGHT"} child of position ${parentPos})`
-              );
-              break;
-            }
-          }
-        }
-      }
-    }
-
-    if (!newPosition) {
-      // Fallback
-      newPosition = highestPosition + 1;
-      const parentPos = Math.floor(newPosition / 2);
-      const parentPkg = await MatrixPackage.findOne({ position: parentPos });
-      parentPackageId = parentPkg?._id || null;
-      console.log(`Fallback to position: ${newPosition}`);
-    }
-
-    // Create matrix entry
-    const newMatrixPackage = new MatrixPackage({
-      userId,
-      position: newPosition,
-      parentPackageId,
-      status: "Active",
-    });
-
-    await newMatrixPackage.save();
-    console.log("Matrix entry saved with ID:", newMatrixPackage._id);
-
-    // Update parent's child reference
-    if (parentPackageId) {
-      const parentPackage = await MatrixPackage.findById(parentPackageId);
-      if (newPosition % 2 === 0) {
-        parentPackage.leftChildId = newMatrixPackage._id;
-        console.log(`Updated parent's LEFT child`);
-      } else {
-        parentPackage.rightChildId = newMatrixPackage._id;
-        console.log(`Updated parent's RIGHT child`);
-      }
-      await parentPackage.save();
-    }
-
-    console.log("=== MATRIX AUTO-ENTRY SUCCESS ===");
-    return {
-      success: true,
-      message: "User entered matrix successfully",
-      data: newMatrixPackage,
-    };
+    return { success: true, message: "User entered matrix", data: result.data };
   } catch (error) {
-    console.error("Error entering matrix:", error);
     return { success: false, message: error.message };
   }
 };
 
-// Get user's matrix package details
-const getMatrixPackage = async (req, res) => {
+// Place a user in a specific stage (sequential position)
+// skipAutoAssign = true when called from enterMatrix (children are explicitly assigned)
+const placeInStage = async (userId, hm, part, skipAutoAssign = false) => {
+  try {
+    const existing = await MatrixPackage.findOne({ userId, hm, part });
+    if (existing) return { success: false, message: "Already in this stage", data: existing };
+
+    // Find next sequential position for this stage
+    const highestInStage = await MatrixPackage.findOne({ hm, part })
+      .sort({ position: -1 })
+      .select("position")
+      .lean();
+
+    const newPosition = (highestInStage?.position || 0) + 1;
+
+    const entry = new MatrixPackage({
+      userId,
+      hm,
+      part,
+      position: newPosition,
+      children: [],
+      status: "Active",
+    });
+
+    await entry.save();
+
+    if (!skipAutoAssign) {
+      // Find a parent who needs children in this stage
+      const required = CHILDREN_REQUIRED[part];
+      const parent = await MatrixPackage.findOne({
+        hm,
+        part,
+        status: "Active",
+        _id: { $ne: entry._id },
+        $expr: { $lt: [{ $size: "$children" }, required] },
+      }).sort({ position: 1 });
+
+      if (parent) {
+        entry.parentPackageId = parent._id;
+        await entry.save();
+        await addChildToParent(parent._id, entry._id, hm, part);
+      }
+    }
+
+    return { success: true, data: entry };
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+};
+
+// Add child to parent and check completion
+const addChildToParent = async (parentId, childId, hm, part) => {
+  const parent = await MatrixPackage.findById(parentId);
+  if (!parent) return;
+
+  const required = CHILDREN_REQUIRED[part];
+  if (parent.children.length >= required) return;
+
+  if (!parent.children.includes(childId)) {
+    parent.children.push(childId);
+    await parent.save();
+  }
+
+  if (parent.children.length >= required) {
+    await checkAndPromote(parentId);
+  }
+};
+
+// Check if a user completed a stage and promote to next
+const checkAndPromote = async (packageId) => {
+  const pkg = await MatrixPackage.findById(packageId);
+  if (!pkg || pkg.status === "Completed") return;
+
+  const required = CHILDREN_REQUIRED[pkg.part];
+  if (pkg.children.length < required) return;
+
+  pkg.status = "Completed";
+  pkg.completedAt = new Date();
+  await pkg.save();
+
+  // Promote to next stage
+  const next = getNextStage(pkg.hm, pkg.part);
+  if (next) {
+    await placeInStage(pkg.userId, next.hm, next.part);
+  }
+};
+
+// Get all matrix stages for a user (for frontend display)
+const getMatrixStages = async (req, res) => {
   try {
     const userId = req.user.userId;
 
-    const matrixPackage = await MatrixPackage.findOne({ userId });
+    // Single query: get all user's stages + children populated
+    const userStages = await MatrixPackage.aggregate([
+      { $match: { userId } },
+      {
+        $lookup: {
+          from: "matrixpackages",
+          localField: "children",
+          foreignField: "_id",
+          as: "childrenData",
+          pipeline: [
+            { $project: { userId: 1, position: 1, status: 1 } },
+            {
+              $lookup: {
+                from: "users",
+                localField: "userId",
+                foreignField: "userId",
+                as: "user",
+                pipeline: [{ $project: { name: 1 } }],
+              },
+            },
+            { $unwind: { path: "$user", preserveNullAndEmptyArrays: true } },
+            { $addFields: { name: "$user.name" } },
+            { $project: { user: 0 } },
+          ],
+        },
+      },
+      { $sort: { hm: 1, part: 1 } },
+    ]);
 
-    if (!matrixPackage) {
-      return res.status(200).json({
-        success: true,
-        message: "User not in matrix yet. Need 4 direct hybrid referrals to enter.",
-        data: null,
-      });
-    }
+    // Build response with all 15 stages
+    const stages = STAGE_CONFIG.map((config) => {
+      const userStage = userStages.find(
+        (s) => s.hm === config.hm && s.part === config.part
+      );
 
-    // Count direct hybrid referrals for context
-    const directUsers = await User.find({ parentId: userId }).select("userId");
-    const directUserIds = directUsers.map((u) => u.userId);
-    const directHybridCount = await HybridPackage.countDocuments({
-      userId: { $in: directUserIds },
+      return {
+        hm: config.hm,
+        part: config.part,
+        entry: config.entry,
+        income: config.income,
+        childrenRequired: CHILDREN_REQUIRED[config.part],
+        joined: !!userStage,
+        status: userStage?.status || null,
+        position: userStage?.position || null,
+        children: userStage?.childrenData || [],
+        completedAt: userStage?.completedAt || null,
+      };
     });
 
     res.status(200).json({
       success: true,
-      message: "Matrix package retrieved successfully",
-      directHybridCount,
-      data: matrixPackage,
+      data: stages,
     });
   } catch (error) {
-    console.error("Error fetching matrix package:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to fetch matrix package",
+      message: "Failed to fetch matrix stages",
       error: error.message,
     });
   }
 };
 
-// Get matrix tree starting from user's position
-const getMatrixTree = async (req, res) => {
+// Get tree for a specific stage (hm + part)
+const getMatrixStageTree = async (req, res) => {
   try {
     const userId = req.user.userId;
+    const hm = parseInt(req.query.hm);
+    const part = parseInt(req.query.part);
 
-    const userPackage = await MatrixPackage.findOne({ userId }).select(
-      "_id userId position parentPackageId leftChildId rightChildId createdAt"
-    );
+    if (!hm || !part || hm < 1 || hm > 5 || part < 1 || part > 3) {
+      return res.status(400).json({ success: false, message: "Invalid hm or part" });
+    }
 
-    if (!userPackage) {
+    const userPkg = await MatrixPackage.findOne({ userId, hm, part });
+    if (!userPkg) {
       return res.status(200).json({
         success: true,
-        message: "No matrix package found",
+        message: "Not in this stage yet",
         data: null,
       });
     }
 
-    // Fetch all matrix packages and users for building tree
-    const allPackages = await MatrixPackage.find({})
-      .select(
-        "_id userId position parentPackageId leftChildId rightChildId createdAt"
-      )
-      .lean();
+    // Get all packages in this stage + user names in one pipeline
+    const allInStage = await MatrixPackage.aggregate([
+      { $match: { hm, part } },
+      {
+        $lookup: {
+          from: "users",
+          localField: "userId",
+          foreignField: "userId",
+          as: "user",
+          pipeline: [{ $project: { name: 1, parentId: 1 } }],
+        },
+      },
+      { $unwind: { path: "$user", preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          userId: 1,
+          position: 1,
+          children: 1,
+          status: 1,
+          parentPackageId: 1,
+          createdAt: 1,
+          name: "$user.name",
+          parentId: "$user.parentId",
+        },
+      },
+    ]);
 
-    const allUsers = await User.find({}).select("userId parentId name").lean();
-    const userMap = {};
-    allUsers.forEach((user) => {
-      userMap[user.userId] = { parentId: user.parentId, name: user.name };
+    const pkgMap = {};
+    allInStage.forEach((p) => {
+      pkgMap[p._id.toString()] = p;
     });
 
-    const packageMap = {};
-    allPackages.forEach((pkg) => {
-      packageMap[pkg._id] = pkg;
-    });
+    const required = CHILDREN_REQUIRED[part];
 
-    const buildTree = (packageId, currentUserId) => {
-      if (!packageId) return null;
-      const pkg = packageMap[packageId];
-      if (!pkg) return null;
+    const buildNode = (pkgId) => {
+      if (!pkgId) return null;
+      const p = pkgMap[pkgId.toString()];
+      if (!p) return null;
+
+      const childNodes = [];
+      for (let i = 0; i < required; i++) {
+        if (p.children[i]) {
+          childNodes.push(buildNode(p.children[i]));
+        } else {
+          childNodes.push(null);
+        }
+      }
 
       return {
-        id: pkg._id.toString(),
-        userId: pkg.userId,
-        name: userMap[pkg.userId]?.name || null,
-        parentId: userMap[pkg.userId]?.parentId || null,
-        position: pkg.position,
-        isCurrentUser: pkg.userId === currentUserId,
-        createdAt: pkg.createdAt,
-        leftChild: buildTree(pkg.leftChildId, currentUserId),
-        rightChild: buildTree(pkg.rightChildId, currentUserId),
+        userId: p.userId,
+        name: p.name || null,
+        parentId: p.parentId || null,
+        position: p.position,
+        status: p.status,
+        isCurrentUser: p.userId === userId,
+        createdAt: p.createdAt,
+        children: childNodes,
       };
     };
 
-    const tree = buildTree(userPackage._id, userId);
+    const tree = buildNode(userPkg._id);
 
     res.status(200).json({
       success: true,
-      message: "Matrix tree retrieved successfully",
       data: tree,
     });
   } catch (error) {
-    console.error("Error fetching matrix tree:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to fetch matrix tree",
-      error: error.message,
-    });
-  }
-};
-
-// Get matrix stats (total members, user's position info)
-const getMatrixStats = async (req, res) => {
-  try {
-    const userId = req.user.userId;
-
-    const totalMembers = await MatrixPackage.countDocuments({ status: "Active" });
-    const userPackage = await MatrixPackage.findOne({ userId });
-
-    // Count members below user in matrix tree
-    let membersBelow = 0;
-    if (userPackage) {
-      const countBelow = async (pkgId) => {
-        if (!pkgId) return 0;
-        const pkg = await MatrixPackage.findById(pkgId).select(
-          "leftChildId rightChildId"
-        );
-        if (!pkg) return 0;
-        let count = 0;
-        if (pkg.leftChildId) count += 1 + (await countBelow(pkg.leftChildId));
-        if (pkg.rightChildId) count += 1 + (await countBelow(pkg.rightChildId));
-        return count;
-      };
-      membersBelow = await countBelow(userPackage._id);
-    }
-
-    res.status(200).json({
-      success: true,
-      data: {
-        totalMembers,
-        userInMatrix: !!userPackage,
-        userPosition: userPackage?.position || null,
-        membersBelow,
-      },
-    });
-  } catch (error) {
-    console.error("Error fetching matrix stats:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch matrix stats",
+      message: "Failed to fetch stage tree",
       error: error.message,
     });
   }
@@ -278,7 +301,9 @@ const getMatrixStats = async (req, res) => {
 
 module.exports = {
   enterMatrix,
-  getMatrixPackage,
-  getMatrixTree,
-  getMatrixStats,
+  placeInStage,
+  getMatrixStages,
+  getMatrixStageTree,
+  CHILDREN_REQUIRED,
+  STAGE_CONFIG,
 };

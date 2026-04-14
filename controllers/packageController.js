@@ -164,7 +164,7 @@ exports.createPackage = async (req, res) => {
 exports.reTopUp = async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { packageAmount } = req.body;
+    const { packageAmount, walletType } = req.body;
     const liveRate = await getLiveRate();
 
     if (!userId || !packageAmount) {
@@ -174,6 +174,10 @@ exports.reTopUp = async (req, res) => {
       });
     }
 
+    // Validate wallet type — only autopoolBalance or retopupBalance allowed
+    const allowedWallets = ["autopoolBalance", "retopupBalance"];
+    const selectedWallet = allowedWallets.includes(walletType) ? walletType : "autopoolBalance";
+
     const userWallet = await Wallet.findOne({ userId });
     if (!userWallet) {
       return res.status(400).json({
@@ -182,11 +186,11 @@ exports.reTopUp = async (req, res) => {
       });
     }
 
-    if (userWallet.USDTBalance < packageAmount) {
+    if (userWallet[selectedWallet] < packageAmount) {
       return res.status(400).json({
         success: false,
-        message: "Insufficient USDT balance",
-        availableBalance: userWallet.USDTBalance,
+        message: `Insufficient ${selectedWallet === "retopupBalance" ? "Retopup" : "Autopool"} balance`,
+        availableBalance: userWallet[selectedWallet],
         requiredAmount: packageAmount,
       });
     }
@@ -194,8 +198,8 @@ exports.reTopUp = async (req, res) => {
     await performWalletTransaction(
       userId,
       -packageAmount, // Negative for debit
-      "USDTBalance",
-      "Retop up",
+      selectedWallet,
+      `Retop up from ${selectedWallet === "retopupBalance" ? "Retopup" : "Autopool"} Wallet`,
       "Completed"
     );
     // Determine package type and ROI based on amount
@@ -239,13 +243,8 @@ exports.createHybridPackage = async (req, res) => {
     const userId = req.user.userId;
     const { txnId } = req.body;
 
-    console.log("=== CREATE HYBRID PACKAGE START ===");
-    console.log("User ID:", userId);
-    console.log("Transaction ID:", txnId);
-
     // Validate user exists
     const user = await User.findOne({ userId: userId });
-    console.log("User found:", user ? `Yes (parentId: ${user.parentId})` : "No");
 
     if (!user) {
       return res.status(400).json({
@@ -256,7 +255,6 @@ exports.createHybridPackage = async (req, res) => {
 
     // Check if user already has a hybrid package
     const existingHybridPackage = await HybridPackage.findOne({ userId });
-    console.log("Existing hybrid package:", existingHybridPackage ? "Yes - User already has package" : "No - Can proceed");
 
     if (existingHybridPackage) {
       return res.status(400).json({
@@ -267,165 +265,56 @@ exports.createHybridPackage = async (req, res) => {
 
     let newPosition = null;
     let parentPackageId = null;
-    let placedAsDirectChild = false;
 
-    console.log("\n--- PLACEMENT LOGIC START ---");
+    // PURE SEQUENTIAL PLACEMENT: Find the first empty slot in the binary tree
+    const allPackages = await HybridPackage.find().select('position leftChildId rightChildId').lean();
+    const existingPositions = new Set(allPackages.map(p => p.position));
 
-    // SPONSORED PLACEMENT: Check if user has a parent (referral sponsor)
-    if (user.parentId) {
-      console.log(`User has parentId: ${user.parentId}, checking sponsored placement...`);
+    const highestPosition = allPackages.length > 0
+      ? Math.max(...allPackages.map(p => p.position))
+      : 0;
 
-      // Get parent's hybrid package
-      const parentHybridPackage = await HybridPackage.findOne({ userId: user.parentId });
-      console.log("Parent hybrid package found:", parentHybridPackage ? `Yes (position: ${parentHybridPackage.position})` : "No");
+    // Build a position map for O(1) lookups
+    const positionMap = {};
+    allPackages.forEach(p => { positionMap[p.position] = p; });
 
-      if (parentHybridPackage) {
-        console.log(`Parent position: ${parentHybridPackage.position}`);
-        console.log(`Parent leftChildId: ${parentHybridPackage.leftChildId || 'null'}, rightChildId: ${parentHybridPackage.rightChildId || 'null'}`);
+    // Start from position 1 (root) if empty, otherwise position 2
+    const startPosition = existingPositions.has(1) ? 2 : 1;
 
-        // Count siblings (users with same parentId) who already have hybrid packages
-        const siblings = await User.find({ parentId: user.parentId }).select('userId');
-        const siblingUserIds = siblings.map(u => u.userId);
-        console.log(`Found ${siblings.length} total siblings (users with same parentId):`, siblingUserIds);
+    for (let pos = startPosition; pos <= highestPosition + 2; pos++) {
+      if (!existingPositions.has(pos)) {
+        const parentPos = Math.floor(pos / 2);
 
-        const siblingsWithPackages = await HybridPackage.find({
-          userId: { $in: siblingUserIds }
-        });
-        const siblingCount = siblingsWithPackages.length;
-
-        console.log(`Siblings with hybrid packages: ${siblingCount}`);
-        console.log(`Sibling packages:`, siblingsWithPackages.map(p => ({ userId: p.userId, position: p.position })));
-
-        // 3rd sibling direct - try to fill parent's LEFT child first, then RIGHT if left is filled
-        if (siblingCount === 2) {
-          if (!parentHybridPackage.leftChildId) {
-            newPosition = parentHybridPackage.position * 2;
-            parentPackageId = parentHybridPackage._id;
-            placedAsDirectChild = true;
-            console.log(`✓ PLACING as 3rd direct sibling (LEFT CHILD) at position ${newPosition}`);
-          } else if (!parentHybridPackage.rightChildId) {
-            newPosition = parentHybridPackage.position * 2 + 1;
-            parentPackageId = parentHybridPackage._id;
-            placedAsDirectChild = true;
-            console.log(`✓ PLACING as 3rd direct sibling (RIGHT CHILD - left was filled) at position ${newPosition}`);
-          } else {
-            console.log(`⚠ User is sibling #3, but parent's both children are filled - using SEQUENTIAL placement`);
-          }
+        if (parentPos === 0) {
+          // Root position
+          newPosition = pos;
+          parentPackageId = null;
+          break;
         }
-        // 4th sibling direct - try to fill parent's RIGHT child first, then LEFT if right is filled
-        else if (siblingCount === 3) {
-          if (!parentHybridPackage.rightChildId) {
-            newPosition = parentHybridPackage.position * 2 + 1;
-            parentPackageId = parentHybridPackage._id;
-            placedAsDirectChild = true;
-            console.log(`✓ PLACING as 4th direct sibling (RIGHT CHILD) at position ${newPosition}`);
-          } else if (!parentHybridPackage.leftChildId) {
-            newPosition = parentHybridPackage.position * 2;
-            parentPackageId = parentHybridPackage._id;
-            placedAsDirectChild = true;
-            console.log(`✓ PLACING as 4th direct sibling (LEFT CHILD - right was filled) at position ${newPosition}`);
-          } else {
-            console.log(`⚠ User is sibling #4, but parent's both children are filled - using SEQUENTIAL placement`);
-          }
-        }
-        // 1st, 2nd, and 5th+ siblings - use sequential placement
-        else {
-          console.log(`⚠ User is sibling #${siblingCount + 1}, will use SEQUENTIAL placement`);
-          console.log(`Reason: siblingCount=${siblingCount}, leftChild=${parentHybridPackage.leftChildId ? 'filled' : 'empty'}, rightChild=${parentHybridPackage.rightChildId ? 'filled' : 'empty'}`);
-        }
-      } else {
-        console.log("Parent has no hybrid package, will use sequential placement");
-      }
-    } else {
-      console.log("User has no parentId, will use sequential placement");
-    }
 
-    // SEQUENTIAL PLACEMENT: If not placed as direct child, find next available position
-    console.log("\n--- SEQUENTIAL PLACEMENT CHECK ---");
-    console.log("placedAsDirectChild:", placedAsDirectChild);
+        const parentPkg = positionMap[parentPos];
+        if (parentPkg) {
+          const isLeftChild = (pos % 2 === 0);
+          const slotIsEmpty = isLeftChild ? !parentPkg.leftChildId : !parentPkg.rightChildId;
 
-    if (!placedAsDirectChild) {
-      console.log("Starting sequential placement...");
-      console.log("Looking for first available position (filling gaps)...");
-
-      // Get all existing positions
-      const allPackages = await HybridPackage.find().select('position');
-      const existingPositions = new Set(allPackages.map(p => p.position));
-
-      // Find the highest position
-      const highestPosition = allPackages.length > 0
-        ? Math.max(...allPackages.map(p => p.position))
-        : 0;
-
-      console.log(`Current highest position: ${highestPosition}`);
-      console.log(`Total packages: ${allPackages.length}`);
-
-      // Search for the first empty position that has a valid parent
-      let foundPosition = null;
-      let foundParentPackage = null;
-
-      // Start from position 2 (position 1 is root)
-      const startPosition = existingPositions.has(1) ? 2 : 1;
-
-      for (let pos = startPosition; pos <= highestPosition + 1; pos++) {
-        if (!existingPositions.has(pos)) {
-          // Position is empty, check if parent exists
-          const parentPos = Math.floor(pos / 2);
-
-          if (parentPos === 0) {
-            // This is position 1 (root)
-            foundPosition = pos;
-            foundParentPackage = null;
-            console.log(`✓ Found empty root position: ${pos}`);
+          if (slotIsEmpty) {
+            newPosition = pos;
+            parentPackageId = parentPkg._id;
             break;
-          } else if (existingPositions.has(parentPos)) {
-            // Parent exists, check if the slot is empty
-            const parentPackage = await HybridPackage.findOne({ position: parentPos })
-              .select('position leftChildId rightChildId userId');
-
-            if (parentPackage) {
-              // Check if the appropriate child slot is empty
-              const isLeftChild = (pos % 2 === 0);
-              const slotIsEmpty = isLeftChild
-                ? !parentPackage.leftChildId
-                : !parentPackage.rightChildId;
-
-              if (slotIsEmpty) {
-                foundPosition = pos;
-                foundParentPackage = parentPackage;
-                console.log(`✓ Found empty position ${pos} (${isLeftChild ? 'LEFT' : 'RIGHT'} child of position ${parentPos}, userId: ${parentPackage.userId})`);
-                break;
-              } else {
-                console.log(`⚠ Position ${pos} is empty but parent's ${isLeftChild ? 'left' : 'right'} child slot is already filled - continuing search...`);
-              }
-            }
-          } else {
-            console.log(`⚠ Position ${pos} is empty but parent position ${parentPos} doesn't exist - skipping...`);
           }
         }
       }
-
-      if (foundPosition) {
-        newPosition = foundPosition;
-        parentPackageId = foundParentPackage?._id || null;
-        console.log(`✓ SEQUENTIAL PLACEMENT at position ${newPosition}`);
-      } else {
-        // Fallback (shouldn't happen in normal operation)
-        console.log("⚠ No valid position found using gap-filling, using fallback logic");
-        newPosition = highestPosition + 1;
-        const parentPos = Math.floor(newPosition / 2);
-        const parentPkg = await HybridPackage.findOne({ position: parentPos });
-        parentPackageId = parentPkg?._id || null;
-        console.log(`Fallback to position: ${newPosition}`);
-      }
     }
 
-    console.log("\n--- CREATING HYBRID PACKAGE ---");
-    console.log("Final position:", newPosition);
-    console.log("Final parentPackageId:", parentPackageId);
-    console.log("Placement type:", placedAsDirectChild ? "DIRECT CHILD" : "SEQUENTIAL");
+    // Fallback if no position found
+    if (!newPosition) {
+      newPosition = highestPosition + 1;
+      const parentPos = Math.floor(newPosition / 2);
+      const parentPkg = await HybridPackage.findOne({ position: parentPos });
+      parentPackageId = parentPkg?._id || null;
+    }
 
-    // Create new hybrid package with fixed amount of 10 USDT using HybridPackage model
+    // Create new hybrid package with fixed amount of 10 USDT
     const newHybridPackage = new HybridPackage({
       userId,
       position: newPosition,
@@ -435,65 +324,48 @@ exports.createHybridPackage = async (req, res) => {
     });
 
     await newHybridPackage.save();
-    console.log("✓ Hybrid package saved successfully with ID:", newHybridPackage._id);
 
     // Update parent's left or right child reference
     if (parentPackageId) {
-      console.log("\n--- UPDATING PARENT REFERENCES ---");
       const parentPackage = await HybridPackage.findById(parentPackageId);
 
       if (newPosition % 2 === 0) {
-        // Even position = left child
         parentPackage.leftChildId = newHybridPackage._id;
-        console.log(`Updated parent's LEFT child to: ${newHybridPackage._id}`);
       } else {
-        // Odd position = right child
         parentPackage.rightChildId = newHybridPackage._id;
-        console.log(`Updated parent's RIGHT child to: ${newHybridPackage._id}`);
       }
 
       await parentPackage.save();
-      console.log("✓ Parent package updated successfully");
-    } else {
-      console.log("No parent package to update (root position)");
     }
 
-    console.log("\n=== CREATE HYBRID PACKAGE SUCCESS ===");
-    console.log("Package ID:", newHybridPackage._id);
-    console.log("Position:", newPosition);
-    console.log("Placement:", placedAsDirectChild ? "direct_child" : "sequential");
-
-    // Check if the sponsor (parentId) now has 4 direct hybrid referrals → auto-enter into matrix
+    // Save matrixLeft/matrixRight on sponsor's hybrid package and trigger matrix entry
     if (user.parentId) {
       try {
-        const sponsorDirectUsers = await User.find({ parentId: user.parentId }).select("userId");
-        const sponsorDirectUserIds = sponsorDirectUsers.map((u) => u.userId);
-        const sponsorDirectHybridCount = await HybridPackage.countDocuments({
-          userId: { $in: sponsorDirectUserIds },
-        });
+        const sponsorHybridPkg = await HybridPackage.findOne({ userId: user.parentId });
 
-        console.log(`Sponsor ${user.parentId} now has ${sponsorDirectHybridCount} direct hybrid referrals`);
+        if (sponsorHybridPkg) {
+          if (!sponsorHybridPkg.matrixLeft) {
+            sponsorHybridPkg.matrixLeft = userId;
+            await sponsorHybridPkg.save();
+          } else if (!sponsorHybridPkg.matrixRight) {
+            sponsorHybridPkg.matrixRight = userId;
+            await sponsorHybridPkg.save();
 
-        if (sponsorDirectHybridCount >= 4) {
-          const matrixResult = await enterMatrix(user.parentId);
-          console.log("Matrix auto-entry result:", matrixResult.message);
+            // 2nd direct filled — sponsor enters matrix
+            await enterMatrix(user.parentId);
+          }
         }
       } catch (matrixError) {
         // Matrix entry failure should not block hybrid package creation
-        console.error("Matrix auto-entry error (non-blocking):", matrixError.message);
       }
     }
 
     res.status(201).json({
       success: true,
       message: "Hybrid package created successfully",
-      data: {
-        ...newHybridPackage.toObject(),
-        placedAs: placedAsDirectChild ? "direct_child" : "sequential",
-      },
+      data: newHybridPackage.toObject(),
     });
   } catch (err) {
-    console.error("Error creating hybrid package:", err);
     res.status(500).json({
       success: false,
       message: "Server Error",
@@ -986,21 +858,21 @@ exports.claimLevelReward = async (req, res) => {
         await performWalletTransaction(
           userId,
           walletAmount,
-          "USDTBalance",
-          `Level ${level} reward (30% wallet distribution)`,
+          "retopupBalance",
+          `Level ${level} reward (30% retopup distribution)`,
           "Completed"
         );
-        console.log(`${claimLabel} wallet distribution: ${walletAmount} USDT added to USDTBalance`);
+        console.log(`${claimLabel} retopup distribution: ${walletAmount} USDT added to retopupBalance`);
       } catch (walletError) {
-        console.error(`${claimLabel} wallet distribution failed:`, walletError);
+        console.error(`${claimLabel} retopup distribution failed:`, walletError);
         return res.status(500).json({
           success: false,
-          message: `Failed to distribute ${claimLabel} reward to wallet`,
+          message: `Failed to distribute ${claimLabel} reward to retopup wallet`,
           error: walletError.message,
         });
       }
     } else if (level >= 7 && level <= 15) {
-      // Levels 7-15 (divided): 50% crypto + 30% wallet per division
+      // Levels 7-15 (divided): 50% crypto + 30% retopup per division
       const cryptoAmount = (finalRewardAmount * 50) / 100;
       const walletAmount = (finalRewardAmount * 30) / 100;
 
@@ -1020,11 +892,11 @@ exports.claimLevelReward = async (req, res) => {
         await performWalletTransaction(
           userId,
           walletAmount,
-          "USDTBalance",
-          `Level ${level} Part ${division} reward (30% wallet distribution)`,
+          "retopupBalance",
+          `Level ${level} Part ${division} reward (30% retopup distribution)`,
           "Completed"
         );
-        console.log(`${claimLabel} wallet distribution: ${walletAmount} USDT added to USDTBalance`);
+        console.log(`${claimLabel} retopup distribution: ${walletAmount} USDT added to retopupBalance`);
       } catch (walletError) {
         console.error(`${claimLabel} wallet distribution failed:`, walletError);
         return res.status(500).json({
@@ -1073,6 +945,71 @@ exports.claimLevelReward = async (req, res) => {
       success: false,
       message: "Failed to claim reward",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
+
+exports.getMatrixTreeFromHybrid = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    // Single aggregation: fetch hybrid packages with user name joined
+    const packages = await HybridPackage.aggregate([
+      { $match: { matrixLeft: { $exists: true } } },
+      { $project: { userId: 1, matrixLeft: 1, matrixRight: 1, createdAt: 1 } },
+      {
+        $lookup: {
+          from: "users",
+          localField: "userId",
+          foreignField: "userId",
+          as: "user",
+          pipeline: [{ $project: { name: 1, parentId: 1 } }],
+        },
+      },
+      { $unwind: { path: "$user", preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          userId: 1,
+          matrixLeft: 1,
+          matrixRight: 1,
+          createdAt: 1,
+          name: "$user.name",
+          parentId: "$user.parentId",
+        },
+      },
+    ]);
+
+    const map = {};
+    packages.forEach((p) => { map[p.userId] = p; });
+
+    const buildNode = (uid) => {
+      if (!uid) return null;
+      const p = map[uid];
+      if (!p) return null;
+
+      return {
+        userId: uid,
+        name: p.name || null,
+        parentId: p.parentId || null,
+        isCurrentUser: uid === userId,
+        createdAt: p.createdAt,
+        leftChild: buildNode(p.matrixLeft),
+        rightChild: buildNode(p.matrixRight),
+      };
+    };
+
+    const tree = buildNode(userId);
+
+    res.status(200).json({
+      success: true,
+      message: tree ? "Matrix tree retrieved successfully" : "No hybrid package found",
+      data: tree,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch matrix tree",
+      error: error.message,
     });
   }
 };

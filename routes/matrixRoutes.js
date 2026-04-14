@@ -3,8 +3,7 @@ const router = express.Router();
 const matrixController = require("../controllers/matrixController");
 const authMiddleware = require("../middlewares/authMiddleware");
 
-router.get("/get-matrix-package", authMiddleware, matrixController.getMatrixPackage);
-router.get("/get-matrix-tree", authMiddleware, matrixController.getMatrixTree);
-router.get("/get-matrix-stats", authMiddleware, matrixController.getMatrixStats);
+router.get("/get-matrix-stages", authMiddleware, matrixController.getMatrixStages);
+router.get("/get-matrix-stage-tree", authMiddleware, matrixController.getMatrixStageTree);
 
 module.exports = router;

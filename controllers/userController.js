@@ -4,6 +4,7 @@ const Wallet = require("../models/Wallet");
 const Packages = require("../models/Packages");
 const Transaction = require("../models/Transaction");
 const Assets = require("../models/Assets");
+const HybridPackage = require("../models/HybridPackage");
 
 // ROUTE: 1 Get logged in user details using wallet address
 exports.getUser = async (req, res) => {
@@ -230,6 +231,7 @@ exports.getRetopup = async (req, res) => {
       userId: user.userId,
       USDTBalance: wallet.USDTBalance,
       autopoolBalance: wallet.autopoolBalance,
+      retopupBalance: wallet.retopupBalance || 0,
       utilityBalance: wallet.utilityBalance,
       totalInvestment,
       totalBonusEarned: bonusInfo[0]?.totalBonusEarned || 0,
@@ -327,12 +329,42 @@ exports.getDashboard = async (req, res) => {
 
     const totalActiveDirect = activeDirectTeam[0]?.activeCount || 0;
 
-    // Calculate bonus information only
+    // Count hybrid direct team (direct referrals who have joined hybrid)
+    const hybridDirectTeam = await User.aggregate([
+      {
+        $match: {
+          parentId: user.userId
+        }
+      },
+      {
+        $lookup: {
+          from: "hybridpackages",
+          localField: "userId",
+          foreignField: "userId",
+          as: "hybridPkg"
+        }
+      },
+      {
+        $match: {
+          "hybridPkg.0": { $exists: true }
+        }
+      },
+      {
+        $count: "hybridCount"
+      }
+    ]);
+
+    const totalHybridDirectTeam = hybridDirectTeam[0]?.hybridCount || 0;
+
+    // Calculate bonus earned — exclude hybrid-related bonuses (Hybrid POI Bonus)
     const bonusInfo = await Transaction.aggregate([
       {
         $match: {
           userId: user.userId,
-          transactionRemark: { $regex: /Bonus/i } // Case-insensitive bonus match
+          $and: [
+            { transactionRemark: { $regex: /Bonus/i } },
+            { transactionRemark: { $not: /Hybrid POI Bonus/i } }
+          ]
         }
       },
       {
@@ -353,6 +385,29 @@ exports.getDashboard = async (req, res) => {
     .limit(5)
     .select('creditedAmount transactionRemark walletName createdAt status -_id');
 
+    // Calculate total hybrid earned (Level claims + Hybrid withdrawals + Hybrid balance withdrawals + Hybrid POI Bonus)
+    const hybridEarnInfo = await Transaction.aggregate([
+      {
+        $match: {
+          userId: user.userId,
+          transactionRemark: {
+            $regex: /^Level \d+ .* reward|^Hybrid Package Withdrawal|^Withdraw Hybrid Balance|^Hybrid POI Bonus/
+          },
+          status: "Completed"
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          totalHybridEarned: { $sum: "$creditedAmount" },
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Check hybrid status
+    const hybridPackage = await HybridPackage.findOne({ userId: user.userId });
+
     // Prepare response
     const dashboardData = {
       userInfo: {
@@ -362,6 +417,7 @@ exports.getDashboard = async (req, res) => {
       walletInfo: {
         USDTBalance: wallet.USDTBalance,
         autopoolBalance: wallet.autopoolBalance,
+        retopupBalance: wallet.retopupBalance || 0,
         utilityBalance: wallet.utilityBalance,
       },
       investmentInfo: {
@@ -372,11 +428,14 @@ exports.getDashboard = async (req, res) => {
       },
       referralInfo: {
         totalDirectTeam,
+        totalHybridDirectTeam,
         totalActiveDirect,
       },
       bonusInfo: {
-        totalBonusEarned: bonusInfo[0]?.totalBonusEarned || 0
+        totalBonusEarned: bonusInfo[0]?.totalBonusEarned || 0,
+        totalHybridEarned: hybridEarnInfo[0]?.totalHybridEarned || 0
       },
+      hybridJoined: !!hybridPackage,
       // allPackages: allPackages,
     };
 

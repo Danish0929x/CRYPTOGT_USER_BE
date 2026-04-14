@@ -33,6 +33,14 @@ const hybridPackageSchema = new mongoose.Schema(
       default: null,
       ref: "HybridPackage",
     },
+    matrixLeft: {
+      type: String,
+      default: null,
+    },
+    matrixRight: {
+      type: String,
+      default: null,
+    },
     status: {
       type: String,
       enum: ["Active", "Inactive", "Mature"],
