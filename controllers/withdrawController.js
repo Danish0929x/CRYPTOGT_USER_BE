@@ -33,7 +33,7 @@ const withdrawUSDT = async (req, res) => {
 
     const usdAmount = Number(amount);
 
-    // 2. Check for existing pending withdrawal (transaction remark starts with "Withdraw USDT")
+    // 2. Check for existing pending withdrawal (business rule — not a security boundary)
     const pendingWithdrawal = await Transaction.findOne({
       userId,
       status: "Pending",
@@ -47,23 +47,7 @@ const withdrawUSDT = async (req, res) => {
       });
     }
 
-    // 3. Find wallet and check balance
-    const wallet = await Wallet.findOne({ userId });
-    if (!wallet) {
-      return res.status(404).json({
-        success: false,
-        message: "Wallet not found",
-      });
-    }
-
-    if (wallet.USDTBalance < usdAmount) {
-      return res.status(400).json({
-        success: false,
-        message: "Insufficient USDT balance",
-      });
-    }
-
-    // 4. Check if user already withdrew today (completed withdrawals with transaction remark starting with "Withdraw USDT")
+    // 3. Check if user already withdrew today (business rule — not a security boundary)
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
 
@@ -89,14 +73,32 @@ const withdrawUSDT = async (req, res) => {
       });
     }
 
-    // 5. Perform transaction
-    const transaction = await performWalletTransaction(
-      userId,
-      -usdAmount,
-      "USDTBalance",
-      "Withdraw USDT - Withdraw USDT",
-      "Pending"
-    );
+    // 4. Atomic debit — performWalletTransaction now uses findOneAndUpdate with $gte guard,
+    // so two concurrent requests cannot both succeed when balance is insufficient.
+    let transaction;
+    try {
+      transaction = await performWalletTransaction(
+        userId,
+        -usdAmount,
+        "USDTBalance",
+        "Withdraw USDT - Withdraw USDT",
+        "Pending"
+      );
+    } catch (walletError) {
+      if (walletError.message.includes("Insufficient")) {
+        return res.status(400).json({
+          success: false,
+          message: "Insufficient USDT balance",
+        });
+      }
+      if (walletError.message.includes("wallet not found")) {
+        return res.status(404).json({
+          success: false,
+          message: "Wallet not found",
+        });
+      }
+      throw walletError;
+    }
 
     if (!transaction.debitedAmount < 500) {
       payout(transaction);
@@ -624,24 +626,7 @@ const withdrawHybridBalance = async (req, res) => {
       });
     }
 
-    // 3. Find wallet and check hybrid balance
-    const wallet = await Wallet.findOne({ userId });
-    if (!wallet) {
-      return res.status(404).json({
-        success: false,
-        message: "Wallet not found",
-      });
-    }
-
-    if (wallet.hybridBalance < withdrawAmount) {
-      return res.status(400).json({
-        success: false,
-        message: "Insufficient hybrid balance",
-        availableBalance: wallet.hybridBalance,
-      });
-    }
-
-    // 4. Check for existing pending withdrawal
+    // 3. Check for existing pending withdrawal
     const pendingWithdrawal = await Transaction.findOne({
       userId,
       status: "Pending",
@@ -655,11 +640,35 @@ const withdrawHybridBalance = async (req, res) => {
       });
     }
 
-    // 5. Validate wallet address for USDT transaction
+    // 4. Validate wallet address for USDT transaction
     if (!user.walletAddress || !/^0x[a-fA-F0-9]{40}$/.test(user.walletAddress)) {
       return res.status(400).json({
         success: false,
         message: "Valid wallet address required for hybrid withdrawal",
+      });
+    }
+
+    // 5. ATOMIC DEDUCT: deduct hybridBalance only if sufficient funds exist.
+    // If another concurrent request already deducted, this returns null → bail out.
+    const wallet = await Wallet.findOneAndUpdate(
+      { userId, hybridBalance: { $gte: withdrawAmount } },
+      { $inc: { hybridBalance: -withdrawAmount } },
+      { new: true }
+    );
+
+    if (!wallet) {
+      // Either wallet doesn't exist OR insufficient balance (possibly concurrent withdrawal)
+      const currentWallet = await Wallet.findOne({ userId });
+      if (!currentWallet) {
+        return res.status(404).json({
+          success: false,
+          message: "Wallet not found",
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        message: "Insufficient hybrid balance",
+        availableBalance: currentWallet.hybridBalance,
       });
     }
 
@@ -668,10 +677,6 @@ const withdrawHybridBalance = async (req, res) => {
 
     try {
       const result = await sendHybridAmount(withdrawAmount, userId, user.walletAddress);
-
-      // 7. Deduct from hybrid balance
-      wallet.hybridBalance -= withdrawAmount;
-      await wallet.save();
 
       // 8. Create transaction record for hybrid balance debit
       const hybridDebitTx = new Transaction({
@@ -703,6 +708,19 @@ const withdrawHybridBalance = async (req, res) => {
       });
     } catch (cryptoError) {
       console.error("Error sending hybrid amount:", cryptoError.message);
+
+      // REFUND: crypto failed after we already atomically deducted → credit it back
+      try {
+        await Wallet.updateOne(
+          { userId },
+          { $inc: { hybridBalance: withdrawAmount } }
+        );
+      } catch (refundError) {
+        console.error(
+          `CRITICAL: failed to refund hybridBalance for ${userId} amount=${withdrawAmount}:`,
+          refundError.message
+        );
+      }
 
       // Create failed transaction record
       const failedTx = new Transaction({

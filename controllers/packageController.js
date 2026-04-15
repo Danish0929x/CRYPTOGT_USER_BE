@@ -178,30 +178,24 @@ exports.reTopUp = async (req, res) => {
     const allowedWallets = ["autopoolBalance", "retopupBalance"];
     const selectedWallet = allowedWallets.includes(walletType) ? walletType : "autopoolBalance";
 
-    const userWallet = await Wallet.findOne({ userId });
-    if (!userWallet) {
+    // Atomic debit via performWalletTransaction — throws if insufficient balance or
+    // if a concurrent request already drained the wallet.
+    try {
+      await performWalletTransaction(
+        userId,
+        -packageAmount, // Negative for debit
+        selectedWallet,
+        `Retop up from ${selectedWallet === "retopupBalance" ? "Retopup" : "Autopool"} Wallet`,
+        "Completed"
+      );
+    } catch (walletError) {
       return res.status(400).json({
         success: false,
-        message: "Wallet not found",
+        message: walletError.message.includes("Insufficient")
+          ? `Insufficient ${selectedWallet === "retopupBalance" ? "Retopup" : "Autopool"} balance`
+          : walletError.message,
       });
     }
-
-    if (userWallet[selectedWallet] < packageAmount) {
-      return res.status(400).json({
-        success: false,
-        message: `Insufficient ${selectedWallet === "retopupBalance" ? "Retopup" : "Autopool"} balance`,
-        availableBalance: userWallet[selectedWallet],
-        requiredAmount: packageAmount,
-      });
-    }
-
-    await performWalletTransaction(
-      userId,
-      -packageAmount, // Negative for debit
-      selectedWallet,
-      `Retop up from ${selectedWallet === "retopupBalance" ? "Retopup" : "Autopool"} Wallet`,
-      "Completed"
-    );
     // Determine package type and ROI based on amount
     const packageType = packageAmount <= 1000 ? "Leader" : "Investor";
 
@@ -750,21 +744,6 @@ exports.claimLevelReward = async (req, res) => {
       });
     }
 
-    // Check if already claimed
-    // For non-divided levels: match by level only
-    // For divided levels: match by level + division
-    const existingLevel = hasDivisions
-      ? hybridPackage.levels.find((l) => l.level === level && l.division === division)
-      : hybridPackage.levels.find((l) => l.level === level && !l.division);
-
-    if (existingLevel && existingLevel.status === "Claimed") {
-      const label = hasDivisions ? `Level ${level} Part ${division}` : `Level ${level}`;
-      return res.status(400).json({
-        success: false,
-        message: `${label} has already been claimed`,
-      });
-    }
-
     // For divided levels, ensure previous division is claimed first (sequential claiming)
     if (hasDivisions && division > 1) {
       const prevDivision = hybridPackage.levels.find(
@@ -786,6 +765,45 @@ exports.claimLevelReward = async (req, res) => {
         message: "User wallet address not found",
       });
     }
+
+    // ============ ATOMIC CLAIM LOCK (prevents race conditions / duplicate claims) ============
+    // Atomically push a "Processing" entry to the levels array ONLY IF no entry for this
+    // (level, division) already exists. If another request already inserted one, this returns
+    // null and we bail out immediately — no crypto is sent.
+    const divisionValue = hasDivisions ? division : null;
+    const lockedPackage = await HybridPackage.findOneAndUpdate(
+      {
+        _id: hybridPackage._id,
+        levels: {
+          $not: {
+            $elemMatch: {
+              level,
+              division: divisionValue,
+            },
+          },
+        },
+      },
+      {
+        $push: {
+          levels: {
+            level,
+            division: divisionValue,
+            status: "Processing",
+            achievedAt: new Date(),
+          },
+        },
+      },
+      { new: true }
+    );
+
+    if (!lockedPackage) {
+      const label = hasDivisions ? `Level ${level} Part ${division}` : `Level ${level}`;
+      return res.status(400).json({
+        success: false,
+        message: `${label} has already been claimed or is being processed`,
+      });
+    }
+    // ========================================================================================
 
     // Check direct referral requirement for levels > 4 (only direct members with a hybrid package)
     if (level > 4 && levelConfig.direct > 0) {
@@ -824,6 +842,26 @@ exports.claimLevelReward = async (req, res) => {
     // Process payment based on level range
     let txnHash = null;
 
+    // Helper to release the lock (remove Processing entry) if anything fails
+    const releaseLock = async () => {
+      try {
+        await HybridPackage.updateOne(
+          { _id: hybridPackage._id },
+          {
+            $pull: {
+              levels: {
+                level,
+                division: divisionValue,
+                status: "Processing",
+              },
+            },
+          }
+        );
+      } catch (e) {
+        console.error("Failed to release claim lock:", e.message);
+      }
+    };
+
     if (level >= 1 && level <= 4) {
       // Levels 1-4: 100% crypto
       try {
@@ -831,6 +869,7 @@ exports.claimLevelReward = async (req, res) => {
         console.log(`Crypto transaction successful for ${claimLabel}: ${txnHash}`);
       } catch (cryptoError) {
         console.error(`Crypto transaction failed for ${claimLabel}:`, cryptoError);
+        await releaseLock();
         return res.status(500).json({
           success: false,
           message: "Failed to process crypto transaction",
@@ -847,6 +886,7 @@ exports.claimLevelReward = async (req, res) => {
         console.log(`Crypto transaction successful for ${claimLabel}: ${txnHash}`);
       } catch (cryptoError) {
         console.error(`Crypto transaction failed for ${claimLabel}:`, cryptoError);
+        await releaseLock();
         return res.status(500).json({
           success: false,
           message: "Failed to process crypto transaction",
@@ -865,11 +905,9 @@ exports.claimLevelReward = async (req, res) => {
         console.log(`${claimLabel} retopup distribution: ${walletAmount} USDT added to retopupBalance`);
       } catch (walletError) {
         console.error(`${claimLabel} retopup distribution failed:`, walletError);
-        return res.status(500).json({
-          success: false,
-          message: `Failed to distribute ${claimLabel} reward to retopup wallet`,
-          error: walletError.message,
-        });
+        // Crypto was already sent — do NOT release the lock; mark the claim as Claimed below
+        // so the user can't re-claim. Log wallet failure for manual reconciliation.
+        console.error(`MANUAL RECONCILIATION NEEDED: crypto sent (tx=${txnHash}) but retopup credit failed for ${userId} ${claimLabel}`);
       }
     } else if (level >= 7 && level <= 15) {
       // Levels 7-15 (divided): 50% crypto + 30% retopup per division
@@ -881,6 +919,7 @@ exports.claimLevelReward = async (req, res) => {
         console.log(`Crypto transaction successful for ${claimLabel}: ${txnHash}`);
       } catch (cryptoError) {
         console.error(`Crypto transaction failed for ${claimLabel}:`, cryptoError);
+        await releaseLock();
         return res.status(500).json({
           success: false,
           message: "Failed to process crypto transaction",
@@ -899,35 +938,27 @@ exports.claimLevelReward = async (req, res) => {
         console.log(`${claimLabel} retopup distribution: ${walletAmount} USDT added to retopupBalance`);
       } catch (walletError) {
         console.error(`${claimLabel} wallet distribution failed:`, walletError);
-        return res.status(500).json({
-          success: false,
-          message: `Failed to distribute ${claimLabel} reward to wallet`,
-          error: walletError.message,
-        });
+        // Crypto was already sent — do NOT release the lock; log for manual reconciliation
+        console.error(`MANUAL RECONCILIATION NEEDED: crypto sent (tx=${txnHash}) but retopup credit failed for ${userId} ${claimLabel}`);
       }
     }
 
-    // Save to DB
-    if (existingLevel) {
-      existingLevel.status = "Claimed";
-      existingLevel.claimedAt = new Date();
-      existingLevel.rewardAmount = finalRewardAmount;
-      if (txnHash) {
-        existingLevel.txnHash = txnHash;
+    // Atomically flip the Processing entry to Claimed with txnHash
+    await HybridPackage.updateOne(
+      {
+        _id: hybridPackage._id,
+        "levels.level": level,
+        "levels.division": divisionValue,
+      },
+      {
+        $set: {
+          "levels.$.status": "Claimed",
+          "levels.$.claimedAt": new Date(),
+          "levels.$.rewardAmount": finalRewardAmount,
+          "levels.$.txnHash": txnHash || null,
+        },
       }
-    } else {
-      hybridPackage.levels.push({
-        level,
-        division: hasDivisions ? division : null,
-        status: "Claimed",
-        rewardAmount: finalRewardAmount,
-        achievedAt: new Date(),
-        claimedAt: new Date(),
-        txnHash: txnHash || null,
-      });
-    }
-
-    await hybridPackage.save();
+    );
 
     res.status(200).json({
       success: true,
