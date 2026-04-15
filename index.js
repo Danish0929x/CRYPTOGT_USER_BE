@@ -43,8 +43,6 @@ app.use('/api/matrix', require('./routes/matrixRoutes'));
 
 app.use('/api/cgthomes', require('./routes/cgtHomesRoutes'));
 
-app.use('/api/test', require('./routes/testRoutes'));
-
 
 // Simple health check
 app.get('/', (req, res) => {

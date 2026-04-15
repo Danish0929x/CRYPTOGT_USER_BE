@@ -8,26 +8,29 @@ const CHILDREN_REQUIRED = { 1: 2, 2: 3, 3: 4 };
 // Stage config matching frontend HYBRID_MATRICES
 const STAGE_CONFIG = [
   { hm: 1, part: 1, entry: 5, income: 2 },
-  { hm: 1, part: 2, entry: 8, income: 12 },
-  { hm: 1, part: 3, entry: 20, income: 100 },
-  { hm: 2, part: 1, entry: 60, income: 20 },
-  { hm: 2, part: 2, entry: 100, income: 100 },
-  { hm: 2, part: 3, entry: 300, income: 1500 },
-  { hm: 3, part: 1, entry: 900, income: 300 },
-  { hm: 3, part: 2, entry: 1500, income: 2000 },
-  { hm: 3, part: 3, entry: 4000, income: 22000 },
-  { hm: 4, part: 1, entry: 10000, income: 5000 },
-  { hm: 4, part: 2, entry: 15000, income: 20000 },
-  { hm: 4, part: 3, entry: 40000, income: 220000 },
-  { hm: 5, part: 1, entry: 100000, income: 50000 },
-  { hm: 5, part: 2, entry: 150000, income: 200000 },
-  { hm: 5, part: 3, entry: 400000, income: 3200000 },
+  { hm: 1, part: 2, entry: 8, income: 9 },
+  { hm: 1, part: 3, entry: 15, income: 20 },
+  { hm: 2, part: 1, entry: 40, income: 20 },
+  { hm: 2, part: 2, entry: 60, income: 30 },
+  { hm: 2, part: 3, entry: 150, income: 100 },
+  { hm: 3, part: 1, entry: 500, income: 200 },
+  { hm: 3, part: 2, entry: 800, income: 400 },
+  { hm: 3, part: 3, entry: 2000, income: 2000 },
+  { hm: 4, part: 1, entry: 6000, income: 2000 },
+  { hm: 4, part: 2, entry: 10000, income: 10000 },
+  { hm: 4, part: 3, entry: 20000, income: 30000 },
+  { hm: 5, part: 1, entry: 50000, income: 20000 },
+  { hm: 5, part: 2, entry: 80000, income: 40000 },
+  { hm: 5, part: 3, entry: 200000, income: 200000 },
+  { hm: 6, part: 1, entry: 600000, income: 400000 },
+  { hm: 6, part: 2, entry: 800000, income: 1200000 },
+  { hm: 6, part: 3, entry: 1200000, income: 4800000 },
 ];
 
 // Get next stage after current
 const getNextStage = (hm, part) => {
   if (part < 3) return { hm, part: part + 1 };
-  if (hm < 5) return { hm: hm + 1, part: 1 };
+  if (hm < 6) return { hm: hm + 1, part: 1 };
   return null;
 };
 
@@ -211,7 +214,7 @@ const getMatrixStageTree = async (req, res) => {
     const hm = parseInt(req.query.hm);
     const part = parseInt(req.query.part);
 
-    if (!hm || !part || hm < 1 || hm > 5 || part < 1 || part > 3) {
+    if (!hm || !part || hm < 1 || hm > 6 || part < 1 || part > 3) {
       return res.status(400).json({ success: false, message: "Invalid hm or part" });
     }
 
