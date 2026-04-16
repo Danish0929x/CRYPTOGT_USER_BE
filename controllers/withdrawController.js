@@ -624,38 +624,7 @@ const withdrawHybridBalance = async (req, res) => {
       });
     }
 
-    // 3. Find wallet and check hybrid balance
-    const wallet = await Wallet.findOne({ userId });
-    if (!wallet) {
-      return res.status(404).json({
-        success: false,
-        message: "Wallet not found",
-      });
-    }
-
-    if (wallet.hybridBalance < withdrawAmount) {
-      return res.status(400).json({
-        success: false,
-        message: "Insufficient hybrid balance",
-        availableBalance: wallet.hybridBalance,
-      });
-    }
-
-    // 4. Check for existing pending withdrawal
-    const pendingWithdrawal = await Transaction.findOne({
-      userId,
-      status: "Pending",
-      transactionRemark: { $regex: "^Withdraw Hybrid Balance" },
-    });
-
-    if (pendingWithdrawal) {
-      return res.status(400).json({
-        success: false,
-        message: "You already have a pending hybrid withdrawal request",
-      });
-    }
-
-    // 5. Validate wallet address for USDT transaction
+    // 3. Validate wallet address for USDT transaction
     if (!user.walletAddress || !/^0x[a-fA-F0-9]{40}$/.test(user.walletAddress)) {
       return res.status(400).json({
         success: false,
@@ -663,17 +632,36 @@ const withdrawHybridBalance = async (req, res) => {
       });
     }
 
-    // 6. Send hybrid amount with distribution
+    // 4. ATOMIC: Deduct balance only if sufficient (prevents double-spend race condition)
+    const wallet = await Wallet.findOneAndUpdate(
+      { userId, hybridBalance: { $gte: withdrawAmount } },
+      { $inc: { hybridBalance: -withdrawAmount } },
+      { new: true }
+    );
+
+    if (!wallet) {
+      // Either wallet not found or insufficient balance
+      const existingWallet = await Wallet.findOne({ userId });
+      if (!existingWallet) {
+        return res.status(404).json({
+          success: false,
+          message: "Wallet not found",
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        message: "Insufficient hybrid balance",
+        availableBalance: existingWallet.hybridBalance,
+      });
+    }
+
+    // 5. Send hybrid amount with distribution
     const { sendHybridAmount } = require("../functions/sendHybridAmount");
 
     try {
       const result = await sendHybridAmount(withdrawAmount, userId, user.walletAddress);
 
-      // 7. Deduct from hybrid balance
-      wallet.hybridBalance -= withdrawAmount;
-      await wallet.save();
-
-      // 8. Create transaction record for hybrid balance debit
+      // 6. Create transaction record for hybrid balance debit
       const hybridDebitTx = new Transaction({
         userId,
         walletName: "hybridBalance",
@@ -703,6 +691,12 @@ const withdrawHybridBalance = async (req, res) => {
       });
     } catch (cryptoError) {
       console.error("Error sending hybrid amount:", cryptoError.message);
+
+      // Refund the atomically-deducted balance since crypto send failed
+      await Wallet.findOneAndUpdate(
+        { userId },
+        { $inc: { hybridBalance: withdrawAmount } }
+      );
 
       // Create failed transaction record
       const failedTx = new Transaction({

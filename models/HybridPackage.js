@@ -66,7 +66,7 @@ const hybridPackageSchema = new mongoose.Schema(
         },
         status: {
           type: String,
-          enum: ["Pending", "Achieved", "Claimed"],
+          enum: ["Pending", "Achieved", "Processing", "Claimed"],
           default: "Pending",
         },
         rewardAmount: {
