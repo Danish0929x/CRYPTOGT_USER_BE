@@ -45,6 +45,23 @@ const matrixPackageSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    claimStatus: {
+      type: String,
+      enum: ["Unclaimed", "Processing", "Claimed"],
+      default: "Unclaimed",
+    },
+    claimedAt: {
+      type: Date,
+      default: null,
+    },
+    rewardAmount: {
+      type: Number,
+      default: 0,
+    },
+    txnHash: {
+      type: String,
+      default: null,
+    },
   },
   { timestamps: true }
 );

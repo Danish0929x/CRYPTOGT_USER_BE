@@ -1,6 +1,7 @@
 const MatrixPackage = require("../models/MatrixPackage");
 const HybridPackage = require("../models/HybridPackage");
 const User = require("../models/User");
+const { makeCryptoTransaction } = require("../utils/makeUSDTCryptoTransaction");
 
 // Children required per part
 const CHILDREN_REQUIRED = { 1: 2, 2: 3, 3: 4 };
@@ -191,6 +192,10 @@ const getMatrixStages = async (req, res) => {
         position: userStage?.position || null,
         children: userStage?.childrenData || [],
         completedAt: userStage?.completedAt || null,
+        claimStatus: userStage?.claimStatus || "Unclaimed",
+        claimedAt: userStage?.claimedAt || null,
+        txnHash: userStage?.txnHash || null,
+        rewardAmount: userStage?.rewardAmount || 0,
       };
     });
 
@@ -302,11 +307,123 @@ const getMatrixStageTree = async (req, res) => {
   }
 };
 
+// Claim reward for a completed matrix stage. Atomic lock + single-shot crypto send.
+// Invariants:
+//  - Stage must exist, belong to the user, and be status="Completed".
+//  - Atomic transition Unclaimed → Processing guards against concurrent double-claims.
+//  - After crypto send succeeds, transition Processing → Claimed is the point of no return.
+//  - Any pre-crypto failure reverts Processing → Unclaimed so the user can retry.
+const claimMatrixReward = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const hm = parseInt(req.body.hm);
+    const part = parseInt(req.body.part);
+
+    if (!hm || !part || hm < 1 || hm > 6 || part < 1 || part > 3) {
+      return res.status(400).json({ success: false, message: "Invalid hm or part" });
+    }
+
+    const stageConfig = STAGE_CONFIG.find((s) => s.hm === hm && s.part === part);
+    if (!stageConfig) {
+      return res.status(400).json({ success: false, message: "Stage config not found" });
+    }
+
+    // ATOMIC LOCK: transition to Processing only if stage is Completed and not already
+    // Processing/Claimed. findOneAndUpdate ensures no two concurrent requests both pass.
+    // `claimStatus in [Unclaimed, null, missing]` covers docs predating this field.
+    const lockResult = await MatrixPackage.findOneAndUpdate(
+      {
+        userId,
+        hm,
+        part,
+        status: "Completed",
+        $or: [
+          { claimStatus: "Unclaimed" },
+          { claimStatus: null },
+          { claimStatus: { $exists: false } },
+        ],
+      },
+      {
+        $set: { claimStatus: "Processing" },
+      },
+      { new: true }
+    );
+
+    if (!lockResult) {
+      // Figure out why the lock failed so the user sees a meaningful message.
+      const existing = await MatrixPackage.findOne({ userId, hm, part });
+      if (!existing) {
+        return res.status(400).json({ success: false, message: "You are not in this stage" });
+      }
+      if (existing.status !== "Completed") {
+        return res.status(400).json({ success: false, message: "Stage is not completed yet" });
+      }
+      if (existing.claimStatus === "Claimed") {
+        return res.status(400).json({ success: false, message: "Reward already claimed" });
+      }
+      if (existing.claimStatus === "Processing") {
+        return res.status(400).json({ success: false, message: "Reward is already being processed" });
+      }
+      return res.status(400).json({ success: false, message: "Unable to claim reward at this time" });
+    }
+
+    const packageId = lockResult._id;
+
+    const user = await User.findOne({ userId });
+    if (!user || !user.walletAddress) {
+      await MatrixPackage.findByIdAndUpdate(packageId, {
+        $set: { claimStatus: "Unclaimed" },
+      });
+      return res.status(400).json({ success: false, message: "User wallet address not found" });
+    }
+
+    const rewardAmount = stageConfig.income;
+
+    // STEP 1: Send crypto. If this fails, nothing has moved — revert and let user retry.
+    let txnHash;
+    try {
+      txnHash = await makeCryptoTransaction(rewardAmount, user.walletAddress);
+    } catch (paymentError) {
+      await MatrixPackage.findByIdAndUpdate(packageId, {
+        $set: { claimStatus: "Unclaimed" },
+      });
+      return res.status(500).json({
+        success: false,
+        message: "Failed to process crypto payment",
+        error: paymentError.message,
+      });
+    }
+
+    // STEP 2: Crypto has moved — finalize Claimed. Point of no return.
+    await MatrixPackage.findByIdAndUpdate(packageId, {
+      $set: {
+        claimStatus: "Claimed",
+        claimedAt: new Date(),
+        rewardAmount,
+        txnHash,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Matrix reward claimed successfully",
+      data: { hm, part, rewardAmount, txnHash },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to claim matrix reward",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   enterMatrix,
   placeInStage,
   getMatrixStages,
   getMatrixStageTree,
+  claimMatrixReward,
   CHILDREN_REQUIRED,
   STAGE_CONFIG,
 };
