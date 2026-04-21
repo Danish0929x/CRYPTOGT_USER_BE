@@ -54,7 +54,7 @@ exports.getUser = async (req, res) => {
 exports.updateUser = async (req, res) => {
   const walletAddress = req.user.walletAddress;
   try {
-    const { name, phone, email, walletAddress: newWalletAddress } = req.body;
+    const { name, walletAddress: newWalletAddress } = req.body;
 
     // Validate walletAddress matches authenticated user
     if (!walletAddress) {
@@ -64,11 +64,9 @@ exports.updateUser = async (req, res) => {
       });
     }
 
-    // Prepare updates
+    // Prepare updates — email and phone are not user-editable
     const updates = {};
     if (name !== undefined) updates.name = name;
-    if (phone !== undefined) updates.phone = phone;
-    if (email !== undefined) updates.email = email;
     if (newWalletAddress !== undefined) updates.walletAddress = newWalletAddress;
 
     // If nothing to update

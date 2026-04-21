@@ -378,11 +378,12 @@ const claimMatrixReward = async (req, res) => {
     }
 
     const rewardAmount = stageConfig.income;
+    const payoutAmount = rewardAmount * 0.9;
 
     // STEP 1: Send crypto. If this fails, nothing has moved — revert and let user retry.
     let txnHash;
     try {
-      txnHash = await makeCryptoTransaction(rewardAmount, user.walletAddress);
+      txnHash = await makeCryptoTransaction(payoutAmount, user.walletAddress);
     } catch (paymentError) {
       await MatrixPackage.findByIdAndUpdate(packageId, {
         $set: { claimStatus: "Unclaimed" },
