@@ -933,62 +933,83 @@ exports.getMatrixTreeFromHybrid = async (req, res) => {
   try {
     const userId = req.user.userId;
 
-    // Single aggregation: fetch hybrid packages with user name joined
-    const packages = await HybridPackage.aggregate([
-      { $match: { matrixLeft: { $exists: true } } },
-      { $project: { userId: 1, matrixLeft: 1, matrixRight: 1, createdAt: 1 } },
-      {
-        $lookup: {
-          from: "users",
-          localField: "userId",
-          foreignField: "userId",
-          as: "user",
-          pipeline: [{ $project: { name: 1, parentId: 1 } }],
-        },
-      },
-      { $unwind: { path: "$user", preserveNullAndEmptyArrays: true } },
-      {
-        $project: {
-          userId: 1,
-          matrixLeft: 1,
-          matrixRight: 1,
-          createdAt: 1,
-          name: "$user.name",
-          parentId: "$user.parentId",
-        },
-      },
-    ]);
+    const currentUser = await User.findOne(
+      { userId },
+      { userId: 1, name: 1, parentId: 1, createdAt: 1 }
+    ).lean();
 
-    const map = {};
-    packages.forEach((p) => { map[p.userId] = p; });
+    if (!currentUser) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
 
-    const buildNode = (uid) => {
-      if (!uid) return null;
-      const p = map[uid];
-      if (!p) return null;
+    // Load all hybrid packages once — we need userId + matrix slot fields
+    const hybridPackages = await HybridPackage.find(
+      {},
+      { userId: 1, matrixLeft: 1, matrixRight: 1 }
+    ).lean();
+
+    const hybridSet = new Set();
+    const matrixByParent = new Map(); // parent userId -> Set of (matrixLeft/matrixRight) userIds
+    hybridPackages.forEach((p) => {
+      hybridSet.add(p.userId);
+      if (!matrixByParent.has(p.userId)) matrixByParent.set(p.userId, new Set());
+      const slots = matrixByParent.get(p.userId);
+      if (p.matrixLeft) slots.add(p.matrixLeft);
+      if (p.matrixRight) slots.add(p.matrixRight);
+    });
+
+    const hybridUsers = await User.find(
+      { userId: { $in: [...hybridSet] } },
+      { userId: 1, name: 1, parentId: 1, createdAt: 1 }
+    ).lean();
+
+    const childrenByParent = new Map();
+    hybridUsers.forEach((u) => {
+      if (!childrenByParent.has(u.parentId)) childrenByParent.set(u.parentId, []);
+      childrenByParent.get(u.parentId).push(u);
+    });
+
+    const visited = new Set();
+    const buildNode = (user, isRoot = false) => {
+      if (visited.has(user.userId)) return null;
+      visited.add(user.userId);
+
+      const myMatrix = matrixByParent.get(user.userId) || new Set();
+      const childUsers = childrenByParent.get(user.userId) || [];
+      const children = childUsers
+        .map((c) => {
+          const node = buildNode(c);
+          if (node) node.isMatrixMember = myMatrix.has(c.userId);
+          return node;
+        })
+        .filter(Boolean);
 
       return {
-        userId: uid,
-        name: p.name || null,
-        parentId: p.parentId || null,
-        isCurrentUser: uid === userId,
-        createdAt: p.createdAt,
-        leftChild: buildNode(p.matrixLeft),
-        rightChild: buildNode(p.matrixRight),
+        userId: user.userId,
+        name: user.name || null,
+        parentId: user.parentId || null,
+        isCurrentUser: isRoot,
+        isHybrid: hybridSet.has(user.userId),
+        isMatrixMember: false,
+        createdAt: user.createdAt,
+        children,
       };
     };
 
-    const tree = buildNode(userId);
+    const tree = buildNode(currentUser, true);
 
     res.status(200).json({
       success: true,
-      message: tree ? "Matrix tree retrieved successfully" : "No hybrid package found",
+      message: "Team tree retrieved successfully",
       data: tree,
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Failed to fetch matrix tree",
+      message: "Failed to fetch team tree",
       error: error.message,
     });
   }
