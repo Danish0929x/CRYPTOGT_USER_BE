@@ -66,17 +66,6 @@ const connectCGTHomesAccount = async (req, res) => {
 
     const cgtHomesUser = cgtHomesResponse.data.user;
 
-    // Check if this email is already connected to another crypto account
-    const existingConnection = await CryptoUser.findOne({ 
-      connectedCGTHomesEmail: email 
-    });
-    
-    if (existingConnection && existingConnection.userId !== cryptoUserId) {
-      return res.status(400).json({ 
-        error: "This CGTHomes account is already connected to another Cryptography account" 
-      });
-    }
-
     // Connect the accounts
     cryptoUser.connectedCGTHomesEmail = email;
     cryptoUser.cgtHomesConnectedAt = new Date();
