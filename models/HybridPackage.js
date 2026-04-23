@@ -56,7 +56,7 @@ const hybridPackageSchema = new mongoose.Schema(
     },
     cycleStartedAt: {
       type: Date,
-      default: Date.now,
+      default: null,
     },
     rejoinCount: {
       type: Number,

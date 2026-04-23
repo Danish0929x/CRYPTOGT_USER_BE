@@ -78,7 +78,7 @@ const withdrawHybridBonus = async (req, res) => {
       return res.status(400).json({ success: false, message: "Bonus already withdrawn" });
     }
 
-    const days = daysSince(pkg.cycleStartedAt || pkg.createdAt);
+    const days = daysSince((pkg.rejoinCount > 0 && pkg.cycleStartedAt ? pkg.cycleStartedAt : pkg.createdAt));
     if (days < MATURITY_DAYS) {
       return res.status(400).json({
         success: false,
@@ -208,7 +208,7 @@ const rejoinHybrid = async (req, res) => {
     const pkg = await HybridPackage.findOne({ userId }).sort({ createdAt: 1 });
     if (!pkg) return res.status(404).json({ success: false, message: "Hybrid package not found" });
 
-    const days = daysSince(pkg.cycleStartedAt || pkg.createdAt);
+    const days = daysSince((pkg.rejoinCount > 0 && pkg.cycleStartedAt ? pkg.cycleStartedAt : pkg.createdAt));
     const paidMode = !!pkg.bonusWithdrawn;
 
     if (paidMode) {
