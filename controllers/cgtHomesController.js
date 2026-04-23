@@ -89,7 +89,7 @@ const connectCGTHomesAccount = async (req, res) => {
       cryptoUser.phone = cgtHomesUser.phone;
     }
 
-    await cryptoUser.save();
+    await cryptoUser.save({ validateModifiedOnly: true });
 
     res.json({
       success: true,
@@ -135,7 +135,7 @@ const disconnectCGTHomesAccount = async (req, res) => {
     const previousEmail = cryptoUser.connectedCGTHomesEmail;
     cryptoUser.connectedCGTHomesEmail = null;
     cryptoUser.cgtHomesConnectedAt = null;
-    await cryptoUser.save();
+    await cryptoUser.save({ validateModifiedOnly: true });
 
     res.json({
       success: true,
