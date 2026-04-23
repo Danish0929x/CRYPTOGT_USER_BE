@@ -78,7 +78,7 @@ const withdrawHybridBonus = async (req, res) => {
       return res.status(400).json({ success: false, message: "Bonus already withdrawn" });
     }
 
-    const days = daysSince(pkg.createdAt);
+    const days = daysSince(pkg.cycleStartedAt || pkg.createdAt);
     if (days < MATURITY_DAYS) {
       return res.status(400).json({
         success: false,
@@ -89,72 +89,23 @@ const withdrawHybridBonus = async (req, res) => {
     const pkgRef = String(pkg._id);
     const inrAmount = CGT_HOMES_USD * INR_RATE;
 
-    // 1. Retopup credit (reversible)
-    await performWalletTransaction(
-      userId,
-      RETOPUP_USD,
-      "retopupBalance",
-      `Hybrid Bonus - Retopup (${pkgRef})`,
-      "Completed",
-      { metadata: { packageId: pkgRef, withdrawalType: "HybridBonusRetopup" } }
-    );
-
-    // 2. CGT Homes INR credit
-    try {
-      const resp = await axios.post(`${CGT_HOMES_API_URL}/wallet/add-balance`, {
-        email: user.connectedCGTHomesEmail,
-        amount: inrAmount,
-        transactionRemark: `Hybrid Bonus from CryptoGT - ${userId}`,
-        liveToken: CGT_HOMES_USD,
-        status: "Success",
-        source: "CryptoGT-HybridBonus",
-      });
-      if (!resp.data?.success) throw new Error(resp.data?.message || "CGT Homes credit failed");
-    } catch (err) {
-      await performWalletTransaction(
-        userId,
-        -RETOPUP_USD,
-        "retopupBalance",
-        `Hybrid Bonus - Retopup REVERSED (CGT Homes failed) (${pkgRef})`,
-        "Completed",
-        { metadata: { packageId: pkgRef, reason: err.message } }
-      );
-      return res.status(502).json({
-        success: false,
-        message: "CGT Homes credit failed. Bonus withdrawal cancelled.",
-        error: err.message,
-      });
-    }
-
-    // 3. USDT payout LAST (irreversible)
+    // 1. USDT payout FIRST — gate everything else on real-crypto success.
+    //    If this fails, no DB mutations happen downstream.
     let usdtTxHash;
     try {
       usdtTxHash = await makeUSDTCryptoTransaction(USDT_USD, user.walletAddress);
     } catch (err) {
-      await performWalletTransaction(
-        userId,
-        -RETOPUP_USD,
-        "retopupBalance",
-        `Hybrid Bonus - Retopup REVERSED (USDT failed) (${pkgRef})`,
-        "Completed",
-        { metadata: { packageId: pkgRef, reason: err.message } }
-      );
       await new Transaction({
         userId,
         walletName: "USDTBalance",
-        transactionRemark: `Hybrid Bonus - USDT payout FAILED (${pkgRef}) - CGT Homes credit needs reconciliation`,
+        transactionRemark: `Hybrid Bonus - USDT payout FAILED (${pkgRef})`,
         status: "Failed",
         toAddress: user.walletAddress,
-        metadata: {
-          packageId: pkgRef,
-          withdrawalType: "HybridBonusRealWallet",
-          cgtHomesCreditedINR: inrAmount,
-          error: err.message,
-        },
+        metadata: { packageId: pkgRef, withdrawalType: "HybridBonusRealWallet", error: err.message },
       }).save();
       return res.status(500).json({
         success: false,
-        message: "USDT payout failed. Retopup reverted. CGT Homes credit flagged for reconciliation.",
+        message: "USDT payout failed. Bonus withdrawal cancelled.",
         error: err.message,
       });
     }
@@ -170,6 +121,50 @@ const withdrawHybridBonus = async (req, res) => {
       metadata: { packageId: pkgRef, withdrawalType: "HybridBonusRealWallet" },
     }).save();
 
+    // 2. Retopup credit (post-USDT; internal, reliable)
+    await performWalletTransaction(
+      userId,
+      RETOPUP_USD,
+      "retopupBalance",
+      `Hybrid Bonus - Retopup (${pkgRef})`,
+      "Completed",
+      { metadata: { packageId: pkgRef, withdrawalType: "HybridBonusRetopup" } }
+    );
+
+    // 3. CGT Homes INR credit. USDT already sent — on failure we log for admin reconciliation, not rollback.
+    let cgtHomesOk = false;
+    let cgtHomesError = null;
+    try {
+      const resp = await axios.post(`${CGT_HOMES_API_URL}/wallet/add-balance`, {
+        email: user.connectedCGTHomesEmail,
+        amount: inrAmount,
+        transactionRemark: `Hybrid Bonus from CryptoGT - ${userId}`,
+        liveToken: CGT_HOMES_USD,
+        status: "Success",
+        source: "CryptoGT-HybridBonus",
+      });
+      cgtHomesOk = Boolean(resp.data?.success);
+      if (!cgtHomesOk) cgtHomesError = resp.data?.message || "CGT Homes credit failed";
+    } catch (err) {
+      cgtHomesError = err.message;
+    }
+
+    await new Transaction({
+      userId,
+      walletName: "USDTBalance",
+      creditedAmount: 0,
+      debitedAmount: 0,
+      transactionRemark: `Hybrid Bonus - CGT Homes Transfer (${pkgRef})`,
+      status: cgtHomesOk ? "Completed" : "Failed",
+      metadata: {
+        packageId: pkgRef,
+        withdrawalType: "HybridBonusCGTHomes",
+        cgtHomesInrAmount: inrAmount,
+        destinationEmail: user.connectedCGTHomesEmail,
+        error: cgtHomesError,
+      },
+    }).save();
+
     pkg.bonusWithdrawn = true;
     pkg.bonusGenerated = USDT_USD + RETOPUP_USD + CGT_HOMES_USD;
     if (pkg.status !== "Mature") pkg.status = "Mature";
@@ -177,12 +172,16 @@ const withdrawHybridBonus = async (req, res) => {
 
     return res.json({
       success: true,
-      message: "Hybrid bonus withdrawn successfully",
+      message: cgtHomesOk
+        ? "Hybrid bonus withdrawn successfully"
+        : "USDT + retopup done; CGT Homes credit failed and is flagged for reconciliation",
       data: {
         packageId: pkgRef,
         realWalletUSDT: USDT_USD,
         retopupUSD: RETOPUP_USD,
         cgtHomesINR: inrAmount,
+        cgtHomesOk,
+        cgtHomesError,
         txHash: usdtTxHash,
       },
     });
@@ -196,4 +195,80 @@ const withdrawHybridBonus = async (req, res) => {
   }
 };
 
-module.exports = { withdrawHybridBonus };
+// Free rejoin (pre-withdraw): user forfeits accrued $30 bonus to restart the cycle. No crypto moves.
+// Paid rejoin (post-withdraw): fresh 10 USDT deposit (txnId from client-side MetaMask transfer) restarts cycle.
+const rejoinHybrid = async (req, res) => {
+  const userId = req.user.userId;
+  const { txnId } = req.body || {};
+
+  try {
+    const user = await User.findOne({ userId });
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    const pkg = await HybridPackage.findOne({ userId }).sort({ createdAt: 1 });
+    if (!pkg) return res.status(404).json({ success: false, message: "Hybrid package not found" });
+
+    const days = daysSince(pkg.cycleStartedAt || pkg.createdAt);
+    const paidMode = !!pkg.bonusWithdrawn;
+
+    if (paidMode) {
+      if (!txnId) {
+        return res.status(400).json({
+          success: false,
+          message: "txnId required — please complete the 10 USDT transfer first",
+        });
+      }
+    } else {
+      if (days < MATURITY_DAYS) {
+        return res.status(400).json({
+          success: false,
+          message: `Rejoin unlocks at day ${MATURITY_DAYS}. ${MATURITY_DAYS - days} day(s) remaining.`,
+        });
+      }
+    }
+
+    pkg.cycleStartedAt = new Date();
+    pkg.bonusWithdrawn = false;
+    pkg.bonusGenerated = 0;
+    pkg.rejoinCount = (pkg.rejoinCount || 0) + 1;
+    if (paidMode) pkg.txnId = txnId;
+    await pkg.save();
+
+    await new Transaction({
+      userId,
+      walletName: "USDTBalance",
+      creditedAmount: 0,
+      debitedAmount: 0,
+      transactionRemark: paidMode
+        ? `Hybrid Rejoin (Paid, 10 USDT) - Package: ${pkg._id}`
+        : `Hybrid Rejoin (Free, bonus forfeited) - Package: ${pkg._id}`,
+      status: "Completed",
+      txHash: paidMode ? txnId : undefined,
+      metadata: {
+        packageId: String(pkg._id),
+        withdrawalType: paidMode ? "HybridRejoinPaid" : "HybridRejoinFree",
+        rejoinCount: pkg.rejoinCount,
+      },
+    }).save();
+
+    return res.json({
+      success: true,
+      message: paidMode ? "Rejoined successfully with 10 USDT deposit" : "Rejoined successfully",
+      data: {
+        packageId: String(pkg._id),
+        cycleStartedAt: pkg.cycleStartedAt,
+        rejoinCount: pkg.rejoinCount,
+        mode: paidMode ? "paid" : "free",
+      },
+    });
+  } catch (error) {
+    console.error("rejoinHybrid error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while rejoining hybrid",
+      error: error.message,
+    });
+  }
+};
+
+module.exports = { withdrawHybridBonus, rejoinHybrid };
