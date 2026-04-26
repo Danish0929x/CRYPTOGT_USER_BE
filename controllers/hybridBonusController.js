@@ -19,7 +19,7 @@ const INR_RATE = 95;
 const MATURITY_DAYS = 100;
 const MAX_WITHDRAWALS_PER_WINDOW = 5;
 const WINDOW_HOURS = 48;
-const APRIL_20_CUTOFF = new Date("2025-04-20T00:00:00.000Z");
+const APRIL_20_CUTOFF = new Date("2026-04-20T00:00:00.000Z");
 
 const daysSince = (d) =>
   Math.floor((Date.now() - new Date(d).getTime()) / (1000 * 60 * 60 * 24));
