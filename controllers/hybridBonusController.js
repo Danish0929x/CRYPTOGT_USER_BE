@@ -251,6 +251,37 @@ const rejoinHybrid = async (req, res) => {
       },
     }).save();
 
+    // Credit $10 retopupBalance on rejoin (best-effort; rejoin already saved)
+    let retopupCredited = false;
+    let retopupError = null;
+    try {
+      await performWalletTransaction(
+        userId,
+        RETOPUP_USD,
+        "retopupBalance",
+        paidMode
+          ? `Hybrid Rejoin Retopup (Paid) - Package: ${pkg._id}`
+          : `Hybrid Rejoin Retopup (Free) - Package: ${pkg._id}`,
+        "Completed",
+        {
+          metadata: {
+            packageId: String(pkg._id),
+            withdrawalType: "HybridRejoinRetopup",
+            rejoinCount: pkg.rejoinCount,
+          },
+        }
+      );
+      retopupCredited = true;
+    } catch (err) {
+      retopupError = err.message;
+      console.error(
+        `[MANUAL-ACTION-REQUIRED] Hybrid rejoin retopup credit failed ` +
+        `(user=${userId}, packageId=${pkg._id}, rejoinCount=${pkg.rejoinCount}, amount=${RETOPUP_USD}). ` +
+        `Credit retopupBalance manually.`,
+        err
+      );
+    }
+
     return res.json({
       success: true,
       message: paidMode ? "Rejoined successfully with 10 USDT deposit" : "Rejoined successfully",
@@ -259,6 +290,9 @@ const rejoinHybrid = async (req, res) => {
         cycleStartedAt: pkg.cycleStartedAt,
         rejoinCount: pkg.rejoinCount,
         mode: paidMode ? "paid" : "free",
+        retopupCredited,
+        retopupAmount: retopupCredited ? RETOPUP_USD : 0,
+        retopupError,
       },
     });
   } catch (error) {
