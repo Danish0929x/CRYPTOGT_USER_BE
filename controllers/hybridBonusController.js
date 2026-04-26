@@ -126,8 +126,9 @@ const withdrawHybridBonus = async (req, res) => {
       metadata: { packageId: pkgRef, withdrawalType: "HybridBonusRealWallet" },
     }).save();
 
-    // Check if post-April 20 user (no retopup, only $10 USDT + $10 CGT Homes = $20)
-    const isPostApril20 = new Date(pkg.createdAt) >= APRIL_20_CUTOFF;
+    // Check if current cycle started after April 20 (use cycleStartedAt if rejoined, otherwise createdAt)
+    const currentCycleDate = pkg.cycleStartedAt || pkg.createdAt;
+    const isPostApril20 = new Date(currentCycleDate) >= APRIL_20_CUTOFF;
 
     // 2. Retopup credit — only for pre-April 20 users
     let retopupDone = false;
@@ -275,8 +276,8 @@ const rejoinHybrid = async (req, res) => {
       },
     }).save();
 
-    // Check if post-April 20 user (only CGT Homes on rejoin, no retopup)
-    const isPostApril20 = new Date(pkg.createdAt) >= APRIL_20_CUTOFF;
+    // Check if current cycle (rejoin date) is after April 20 — use the new cycleStartedAt just set above
+    const isPostApril20 = new Date(pkg.cycleStartedAt) >= APRIL_20_CUTOFF;
 
     // Credit $10 retopupBalance on rejoin — only for pre-April 20 users
     let retopupCredited = false;
