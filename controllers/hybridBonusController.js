@@ -19,6 +19,7 @@ const INR_RATE = 95;
 const MATURITY_DAYS = 100;
 const MAX_WITHDRAWALS_PER_WINDOW = 5;
 const WINDOW_HOURS = 48;
+const APRIL_20_CUTOFF = new Date("2025-04-20T00:00:00.000Z");
 
 const daysSince = (d) =>
   Math.floor((Date.now() - new Date(d).getTime()) / (1000 * 60 * 60 * 24));
@@ -125,15 +126,22 @@ const withdrawHybridBonus = async (req, res) => {
       metadata: { packageId: pkgRef, withdrawalType: "HybridBonusRealWallet" },
     }).save();
 
-    // 2. Retopup credit (post-USDT; internal, reliable)
-    await performWalletTransaction(
-      userId,
-      RETOPUP_USD,
-      "retopupBalance",
-      `Hybrid Bonus - Retopup (${pkgRef})`,
-      "Completed",
-      { metadata: { packageId: pkgRef, withdrawalType: "HybridBonusRetopup" } }
-    );
+    // Check if post-April 20 user (no retopup, only $10 USDT + $10 CGT Homes = $20)
+    const isPostApril20 = new Date(pkg.createdAt) >= APRIL_20_CUTOFF;
+
+    // 2. Retopup credit — only for pre-April 20 users
+    let retopupDone = false;
+    if (!isPostApril20) {
+      await performWalletTransaction(
+        userId,
+        RETOPUP_USD,
+        "retopupBalance",
+        `Hybrid Bonus - Retopup (${pkgRef})`,
+        "Completed",
+        { metadata: { packageId: pkgRef, withdrawalType: "HybridBonusRetopup" } }
+      );
+      retopupDone = true;
+    }
 
     // 3. CGT Homes INR credit. USDT already sent — on failure we log for admin reconciliation, not rollback.
     let cgtHomesOk = false;
@@ -169,24 +177,28 @@ const withdrawHybridBonus = async (req, res) => {
       },
     }).save();
 
+    const totalBonus = isPostApril20 ? (USDT_USD + CGT_HOMES_USD) : (USDT_USD + RETOPUP_USD + CGT_HOMES_USD);
     pkg.bonusWithdrawn = true;
-    pkg.bonusGenerated = USDT_USD + RETOPUP_USD + CGT_HOMES_USD;
+    pkg.bonusGenerated = totalBonus;
     if (pkg.status !== "Mature") pkg.status = "Mature";
     await pkg.save();
 
+    const successMsg = isPostApril20
+      ? (cgtHomesOk ? "Hybrid bonus withdrawn successfully ($10 USDT + $10 CGT Homes)" : "USDT done; CGT Homes credit failed and is flagged for reconciliation")
+      : (cgtHomesOk ? "Hybrid bonus withdrawn successfully" : "USDT + retopup done; CGT Homes credit failed and is flagged for reconciliation");
+
     return res.json({
       success: true,
-      message: cgtHomesOk
-        ? "Hybrid bonus withdrawn successfully"
-        : "USDT + retopup done; CGT Homes credit failed and is flagged for reconciliation",
+      message: successMsg,
       data: {
         packageId: pkgRef,
         realWalletUSDT: USDT_USD,
-        retopupUSD: RETOPUP_USD,
+        retopupUSD: retopupDone ? RETOPUP_USD : 0,
         cgtHomesINR: inrAmount,
         cgtHomesOk,
         cgtHomesError,
         txHash: usdtTxHash,
+        isPostApril20,
       },
     });
   } catch (error) {
@@ -263,40 +275,94 @@ const rejoinHybrid = async (req, res) => {
       },
     }).save();
 
-    // Credit $10 retopupBalance on rejoin (best-effort; rejoin already saved)
+    // Check if post-April 20 user (only CGT Homes on rejoin, no retopup)
+    const isPostApril20 = new Date(pkg.createdAt) >= APRIL_20_CUTOFF;
+
+    // Credit $10 retopupBalance on rejoin — only for pre-April 20 users
     let retopupCredited = false;
     let retopupError = null;
+    if (!isPostApril20) {
+      try {
+        await performWalletTransaction(
+          userId,
+          RETOPUP_USD,
+          "retopupBalance",
+          paidMode
+            ? `Hybrid Rejoin Retopup (Paid) - Package: ${pkg._id}`
+            : `Hybrid Rejoin Retopup (Free) - Package: ${pkg._id}`,
+          "Completed",
+          {
+            metadata: {
+              packageId: String(pkg._id),
+              withdrawalType: "HybridRejoinRetopup",
+              rejoinCount: pkg.rejoinCount,
+            },
+          }
+        );
+        retopupCredited = true;
+      } catch (err) {
+        retopupError = err.message;
+        console.error(
+          `[MANUAL-ACTION-REQUIRED] Hybrid rejoin retopup credit failed ` +
+          `(user=${userId}, packageId=${pkg._id}, rejoinCount=${pkg.rejoinCount}, amount=${RETOPUP_USD}). ` +
+          `Credit retopupBalance manually.`,
+          err
+        );
+      }
+    }
+
+    // Credit 950 INR ($10) to CGT Homes on rejoin
+    const pkgRef = String(pkg._id);
+    const inrAmount = CGT_HOMES_USD * INR_RATE;
+    let cgtHomesOk = false;
+    let cgtHomesError = null;
     try {
-      await performWalletTransaction(
-        userId,
-        RETOPUP_USD,
-        "retopupBalance",
-        paidMode
-          ? `Hybrid Rejoin Retopup (Paid) - Package: ${pkg._id}`
-          : `Hybrid Rejoin Retopup (Free) - Package: ${pkg._id}`,
-        "Completed",
-        {
-          metadata: {
-            packageId: String(pkg._id),
-            withdrawalType: "HybridRejoinRetopup",
-            rejoinCount: pkg.rejoinCount,
-          },
-        }
-      );
-      retopupCredited = true;
+      const resp = await axios.post(`${CGT_HOMES_API_URL}/wallet/add-balance`, {
+        email: user.connectedCGTHomesEmail,
+        amount: inrAmount,
+        transactionRemark: `Hybrid Rejoin Bonus from CryptoGT - ${userId}`,
+        liveToken: CGT_HOMES_USD,
+        status: "Success",
+        source: "CryptoGT-HybridRejoin",
+      });
+      cgtHomesOk = Boolean(resp.data?.success);
+      if (!cgtHomesOk) cgtHomesError = resp.data?.message || "CGT Homes credit failed";
     } catch (err) {
-      retopupError = err.message;
+      cgtHomesError = err.message;
       console.error(
-        `[MANUAL-ACTION-REQUIRED] Hybrid rejoin retopup credit failed ` +
-        `(user=${userId}, packageId=${pkg._id}, rejoinCount=${pkg.rejoinCount}, amount=${RETOPUP_USD}). ` +
-        `Credit retopupBalance manually.`,
+        `[MANUAL-ACTION-REQUIRED] Hybrid rejoin CGT Homes credit failed ` +
+        `(user=${userId}, packageId=${pkgRef}, rejoinCount=${pkg.rejoinCount}, amount=${inrAmount} INR). ` +
+        `Credit CGT Homes manually.`,
         err
       );
     }
 
+    await new Transaction({
+      userId,
+      walletName: "USDTBalance",
+      creditedAmount: 0,
+      debitedAmount: 0,
+      transactionRemark: `Hybrid Rejoin - CGT Homes Transfer (${pkgRef})`,
+      status: cgtHomesOk ? "Completed" : "Failed",
+      metadata: {
+        packageId: pkgRef,
+        withdrawalType: "HybridRejoinCGTHomes",
+        cgtHomesInrAmount: inrAmount,
+        destinationEmail: user.connectedCGTHomesEmail,
+        rejoinCount: pkg.rejoinCount,
+        error: cgtHomesError,
+      },
+    }).save();
+
     return res.json({
       success: true,
-      message: paidMode ? "Rejoined successfully with 10 USDT deposit" : "Rejoined successfully",
+      message: paidMode
+        ? (cgtHomesOk
+          ? "Rejoined successfully with 10 USDT deposit"
+          : "Rejoined successfully; CGT Homes credit failed and is flagged for reconciliation")
+        : (cgtHomesOk
+          ? "Rejoined successfully"
+          : "Rejoined successfully; CGT Homes credit failed and is flagged for reconciliation"),
       data: {
         packageId: String(pkg._id),
         cycleStartedAt: pkg.cycleStartedAt,
@@ -305,6 +371,9 @@ const rejoinHybrid = async (req, res) => {
         retopupCredited,
         retopupAmount: retopupCredited ? RETOPUP_USD : 0,
         retopupError,
+        cgtHomesOk,
+        cgtHomesINR: inrAmount,
+        cgtHomesError,
       },
     });
   } catch (error) {
