@@ -55,7 +55,11 @@ const withdrawHybridBonus = async (req, res) => {
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
     if (!user.connectedCGTHomesEmail) {
-      return res.status(400).json({ success: false, message: "CGT Homes account not connected" });
+      return res.status(400).json({
+        success: false,
+        message: "CGT Homes account not connected. Please connect your CGT Homes account before withdrawing.",
+        code: "CGT_HOMES_NOT_CONNECTED",
+      });
     }
 
     if (!user.walletAddress || !/^0x[a-fA-F0-9]{40}$/.test(user.walletAddress)) {
@@ -204,6 +208,14 @@ const rejoinHybrid = async (req, res) => {
   try {
     const user = await User.findOne({ userId });
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    if (!user.connectedCGTHomesEmail) {
+      return res.status(400).json({
+        success: false,
+        message: "CGT Homes account not connected. Please connect your CGT Homes account before rejoining.",
+        code: "CGT_HOMES_NOT_CONNECTED",
+      });
+    }
 
     const pkg = await HybridPackage.findOne({ userId }).sort({ createdAt: 1 });
     if (!pkg) return res.status(404).json({ success: false, message: "Hybrid package not found" });
