@@ -174,9 +174,14 @@ exports.reTopUp = async (req, res) => {
       });
     }
 
-    // Validate wallet type — only autopoolBalance or retopupBalance allowed
-    const allowedWallets = ["autopoolBalance", "retopupBalance"];
-    const selectedWallet = allowedWallets.includes(walletType) ? walletType : "autopoolBalance";
+    // Validate wallet type — autopoolBalance, retopupBalance, or USDTBalance allowed
+    const WALLET_LABELS = {
+      autopoolBalance: "Autopool",
+      retopupBalance: "Retopup",
+      USDTBalance: "USDT",
+    };
+    const selectedWallet = WALLET_LABELS[walletType] ? walletType : "autopoolBalance";
+    const walletLabel = WALLET_LABELS[selectedWallet];
 
     const userWallet = await Wallet.findOne({ userId });
     if (!userWallet) {
@@ -189,7 +194,7 @@ exports.reTopUp = async (req, res) => {
     if (userWallet[selectedWallet] < packageAmount) {
       return res.status(400).json({
         success: false,
-        message: `Insufficient ${selectedWallet === "retopupBalance" ? "Retopup" : "Autopool"} balance`,
+        message: `Insufficient ${walletLabel} balance`,
         availableBalance: userWallet[selectedWallet],
         requiredAmount: packageAmount,
       });
@@ -199,7 +204,7 @@ exports.reTopUp = async (req, res) => {
       userId,
       -packageAmount, // Negative for debit
       selectedWallet,
-      `Retop up from ${selectedWallet === "retopupBalance" ? "Retopup" : "Autopool"} Wallet`,
+      `Retop up from ${walletLabel} Wallet`,
       "Completed"
     );
     // Determine package type and ROI based on amount
