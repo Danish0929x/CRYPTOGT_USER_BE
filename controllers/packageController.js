@@ -10,6 +10,11 @@ const { sendHybridAmount } = require("../functions/sendHybridAmount");
 const { makeCryptoTransaction } = require("../utils/makeUSDTCryptoTransaction");
 const { enterMatrix } = require("./matrixController");
 
+// Allowed Buy amounts (must mirror frontend CreatePackage.js)
+const LEADER_AMOUNTS = [50, 100, 200];
+const INVESTOR_AMOUNTS = [250, 500, 1000, 2000, 5000];
+const ALLOWED_BUY_AMOUNTS = new Set([...LEADER_AMOUNTS, ...INVESTOR_AMOUNTS]);
+
 // Level Configuration based on International AutoPool
 // divisions: 1 = single claim, 4 = split into 4 parts (levels 7-15)
 const LEVEL_CONFIG = {
@@ -107,20 +112,27 @@ exports.createPackage = async (req, res) => {
       });
     }
 
-    // Determine package type and ROI based on amount
-    const packageType = packageAmount <= 1000 ? "Leader" : "Investor";
+    const amountNum = Number(packageAmount);
+    if (!ALLOWED_BUY_AMOUNTS.has(amountNum)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid package amount. Allowed: Leader (${LEADER_AMOUNTS.map(a => `$${a}`).join(", ")}), Investor (${INVESTOR_AMOUNTS.map(a => `$${a}`).join(", ")}).`,
+      });
+    }
+
+    const packageType = LEADER_AMOUNTS.includes(amountNum) ? "Leader" : "Investor";
 
     // Create new package according to model
     const newPackage = new Package({
       userId,
       packageType,
-      cgtCoin: parseFloat((packageAmount / liveRate).toFixed(5)),
-      packageAmount,
+      cgtCoin: parseFloat((amountNum / liveRate).toFixed(5)),
+      packageAmount: amountNum,
       txnId,
       poi: 0,
       startDate: new Date(),
       status: "Requested", // Using boolean true instead of string
-      type: "Buy" 
+      type: "Buy"
     });
 
     await newPackage.save();
@@ -174,6 +186,14 @@ exports.reTopUp = async (req, res) => {
       });
     }
 
+    const amountNum = Number(packageAmount);
+    if (!ALLOWED_BUY_AMOUNTS.has(amountNum)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid package amount. Allowed: Leader (${LEADER_AMOUNTS.map(a => `$${a}`).join(", ")}), Investor (${INVESTOR_AMOUNTS.map(a => `$${a}`).join(", ")}).`,
+      });
+    }
+
     // Validate wallet type — autopoolBalance, retopupBalance, or USDTBalance allowed
     const WALLET_LABELS = {
       autopoolBalance: "Autopool",
@@ -191,36 +211,36 @@ exports.reTopUp = async (req, res) => {
       });
     }
 
-    if (userWallet[selectedWallet] < packageAmount) {
+    if (userWallet[selectedWallet] < amountNum) {
       return res.status(400).json({
         success: false,
         message: `Insufficient ${walletLabel} balance`,
         availableBalance: userWallet[selectedWallet],
-        requiredAmount: packageAmount,
+        requiredAmount: amountNum,
       });
     }
 
     await performWalletTransaction(
       userId,
-      -packageAmount, // Negative for debit
+      -amountNum, // Negative for debit
       selectedWallet,
       `Retop up from ${walletLabel} Wallet`,
       "Completed"
     );
-    // Determine package type and ROI based on amount
-    const packageType = packageAmount <= 1000 ? "Leader" : "Investor";
+
+    const packageType = LEADER_AMOUNTS.includes(amountNum) ? "Leader" : "Investor";
 
     // Create new package according to model
     const newPackage = new Package({
       userId,
       packageType,
-      cgtCoin: parseFloat((packageAmount / liveRate).toFixed(5)),
-      packageAmount,
+      cgtCoin: parseFloat((amountNum / liveRate).toFixed(5)),
+      packageAmount: amountNum,
       txnId: null,
       poi: 0,
       startDate: new Date(),
       status: "Active", // Using boolean true instead of string
-      type: "ReTopup"  
+      type: "ReTopup"
     });
 
     await newPackage.save();
