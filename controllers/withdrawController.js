@@ -292,15 +292,17 @@ const sendWithdrawOTP = async (req, res) => {
 };
 
 /**
- * Withdraw Hybrid Package
- * Distributes 10 USDT to real wallet, 10 USDT to retopup wallet, 10 USDT (900 CGT) to CGT Homes
+ * Withdraw Hybrid Package — manual admin approval flow.
+ * User-side: atomically lock package (Matured → PendingWithdraw) →
+ * create Pending Transaction. No crypto, no credits, no CGT Homes call yet.
+ * Admin Accept performs the actual distribution; Admin Reject restores the package.
  */
 const withdrawHybrid = async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { packageId, otp } = req.body;
+    const { packageId } = req.body;
 
-    // 1. Validate packageId and OTP
+    // 1. Validate packageId
     if (!packageId) {
       return res.status(400).json({
         success: false,
@@ -308,39 +310,7 @@ const withdrawHybrid = async (req, res) => {
       });
     }
 
-    if (!otp) {
-      return res.status(400).json({
-        success: false,
-        message: "OTP is required for withdrawal",
-      });
-    }
-
-    // 2. Verify OTP via 2Factor.in
-    const otpRecord = await WithdrawOtp.findOne({
-      userId,
-      purpose: "withdrawHybrid",
-      verified: false,
-    });
-
-    if (!otpRecord) {
-      return res.status(400).json({
-        success: false,
-        message: "No OTP request found. Please request a new OTP.",
-      });
-    }
-
-    const isOtpValid = await verifyOTP(otpRecord.sessionId, otp);
-    if (!isOtpValid) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid or expired OTP. Please try again.",
-      });
-    }
-
-    // Mark OTP as verified and clean up
-    await WithdrawOtp.deleteMany({ userId, purpose: "withdrawHybrid" });
-
-    // 3. Find user and check CGT Homes connection
+    // 2. Find user and check CGT Homes connection
     const user = await User.findOne({ userId });
     if (!user) {
       return res.status(404).json({
@@ -356,41 +326,7 @@ const withdrawHybrid = async (req, res) => {
       });
     }
 
-    // 3. Find package and validate
-    const package = await Package.findById(packageId);
-    if (!package) {
-      return res.status(404).json({
-        success: false,
-        message: "Package not found",
-      });
-    }
-
-    // Check package belongs to user
-    if (package.userId !== userId) {
-      return res.status(403).json({
-        success: false,
-        message: "Unauthorized: This package does not belong to you",
-      });
-    }
-
-    // Check package type is Hybrid
-    if (package.packageType !== "Hybrid") {
-      return res.status(400).json({
-        success: false,
-        message: "Package type must be Hybrid",
-      });
-    }
-
-    // Check status is Matured
-    if (package.status !== "Matured") {
-      return res.status(400).json({
-        success: false,
-        message: "Package must be matured before withdrawal",
-        currentStatus: package.status,
-      });
-    }
-
-    // Check user has a valid wallet address for direct USDT payout
+    // 3. Validate wallet address (re-validated at admin accept time)
     if (!user.walletAddress || !/^0x[a-fA-F0-9]{40}$/.test(user.walletAddress)) {
       return res.status(400).json({
         success: false,
@@ -398,157 +334,77 @@ const withdrawHybrid = async (req, res) => {
       });
     }
 
-    // 4. Distribute amounts
-    const realWalletAmount = 10;
-    const retopupWalletAmount = 10;
-    const cgtHomesAmount = 10;
-    const cgtHomesCoinAmount = 900; // 10 × 90
-    const fromWalletAddress = "0x5C28b3979609eF43A2C4B73257d540cd29d9C1F0";
-
-    // Send 10 USDT directly to user's wallet address using makeUSDTCryptoTransaction
-    let realWalletTxHash = null;
-
-    try {
-      realWalletTxHash = await makeUSDTCryptoTransaction(realWalletAmount, user.walletAddress);
-    } catch (cryptoError) {
-      
-      // Create failed transaction record
-      const failedTx = new Transaction({
-        userId,
-        walletName: "USDTBalance",
-        creditedAmount: 0,
-        debitedAmount: 0,
-        transactionRemark: `Hybrid Package Withdrawal - Failed (Package: ${packageId})`,
-        status: "Failed",
-        fromAddress: fromWalletAddress,
-        toAddress: user.walletAddress,
-        metadata: {
-          packageId: packageId,
-          withdrawalType: "HybridRealWallet",
-          error: cryptoError.message,
-        },
-      });
-      await failedTx.save();
-
-      return res.status(500).json({
-        success: false,
-        message: "Failed to send USDT to your wallet. Withdrawal cancelled.",
-        error: cryptoError.message,
-      });
-    }
-
-    // Create transaction record for real wallet USDT payout (only if successful)
-    const realWalletTx = new Transaction({
-      userId,
-      walletName: "USDTBalance",
-      creditedAmount: realWalletAmount,
-      debitedAmount: 0,
-      transactionRemark: `Hybrid Package Withdrawal - Real Wallet (Package: ${packageId})`,
-      status: "Completed",
-      txHash: realWalletTxHash,
-      fromAddress: fromWalletAddress,
-      toAddress: user.walletAddress,
-      metadata: {
-        packageId: packageId,
-        withdrawalType: "HybridRealWallet",
-      },
-    });
-    await realWalletTx.save();
-
-    // Add 10 USDT to retopup wallet (autopoolBalance)
-    const retopupWalletTx = await performWalletTransaction(
-      userId,
-      retopupWalletAmount,
-      "autopoolBalance",
-      `Hybrid Package Withdrawal - Retopup Wallet (Package: ${packageId})`,
-      "Completed",
+    // 4. ATOMIC LOCK: transition the package Matured → PendingWithdraw only if it
+    //    belongs to this user, is Hybrid, and is currently Matured. Single op,
+    //    no race, no double-request.
+    const lockedPackage = await Package.findOneAndUpdate(
       {
-        metadata: {
-          packageId: packageId,
-          withdrawalType: "HybridRetopup",
-        },
-      }
+        _id: packageId,
+        userId,
+        packageType: "Hybrid",
+        status: "Matured",
+      },
+      { $set: { status: "PendingWithdraw" } },
+      { new: true }
     );
 
-    // Transfer to CGT Homes (900 CGT coins)
-    let cgtHomesTransferSuccess = false;
-    let cgtHomesError = null;
-
-    try {
-      const cgtHomesResponse = await axios.post(
-        `${CGT_HOMES_API_URL}/wallet/add-balance`,
-        {
-          email: user.connectedCGTHomesEmail,
-          amount: cgtHomesCoinAmount,
-          transactionRemark: `Hybrid Package Withdrawal from CryptoGT - User: ${userId}, Package: ${packageId}`,
-          status: "Success",
-        }
-      );
-
-      if (cgtHomesResponse.data.success) {
-        cgtHomesTransferSuccess = true;
-      } else {
-        cgtHomesError = cgtHomesResponse.data.message || "CGT Homes transfer failed";
-        console.error("CGT Homes API error:", cgtHomesResponse.data);
+    if (!lockedPackage) {
+      const existing = await Package.findById(packageId);
+      if (!existing) {
+        return res.status(404).json({ success: false, message: "Package not found" });
       }
-    } catch (apiError) {
-      cgtHomesError = apiError.message;
-      console.error("Error calling CGT Homes API:", apiError.message);
+      if (existing.userId !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: "Unauthorized: This package does not belong to you",
+        });
+      }
+      if (existing.packageType !== "Hybrid") {
+        return res.status(400).json({ success: false, message: "Package type must be Hybrid" });
+      }
+      if (existing.status === "PendingWithdraw") {
+        return res.status(400).json({
+          success: false,
+          message: "Withdrawal already requested. Awaiting admin approval.",
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        message: "Package must be matured before withdrawal",
+        currentStatus: existing.status,
+      });
     }
 
-    // Create transaction record for CGT Homes transfer (no wallet balance change, just record)
-    const cgtHomesTx = new Transaction({
+    // 5. Create Pending transaction. Admin accept will use this row + metadata to
+    //    drive the actual distribution.
+    const pendingTx = new Transaction({
       userId,
       walletName: "USDTBalance",
       creditedAmount: 0,
       debitedAmount: 0,
-      transactionRemark: `Hybrid Package Withdrawal - CGT Homes Transfer (Package: ${packageId})`,
-      status: cgtHomesTransferSuccess ? "Completed" : "Failed",
+      transactionRemark: `Hybrid Package Withdrawal - $10 (Awaiting admin approval, Package: ${packageId})`,
+      status: "Pending",
+      toAddress: user.walletAddress,
       metadata: {
-        packageId: packageId,
-        withdrawalType: "HybridCGTHomes",
-        cgtHomesCoinAmount: cgtHomesCoinAmount,
+        withdrawalType: "HybridPackage",
+        packageId: String(packageId),
+        realWalletAmount: 10,
+        retopupWalletAmount: 10,
+        cgtHomesUsdtAmount: 10,
+        cgtHomesCoinAmount: 900,
         destinationEmail: user.connectedCGTHomesEmail,
-        error: cgtHomesError,
       },
     });
-    await cgtHomesTx.save();
+    await pendingTx.save();
 
-    // 5. Update package status to Withdrawn
-    package.status = "Inactive";
-    await package.save();
-
-    // 6. Return success response
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "Hybrid package withdrawn successfully",
+      message: "Withdraw request submitted. Awaiting admin approval.",
       data: {
-        packageId: package._id,
-        userId: userId,
-        distributions: {
-          realWallet: {
-            amount: realWalletAmount,
-            transactionId: realWalletTx._id,
-            status: "Completed",
-            txHash: realWalletTxHash,
-            toAddress: user.walletAddress,
-          },
-          retopupWallet: {
-            amount: retopupWalletAmount,
-            transactionId: retopupWalletTx._id,
-            status: "Completed",
-          },
-          cgtHomes: {
-            usdtAmount: cgtHomesAmount,
-            cgtCoinAmount: cgtHomesCoinAmount,
-            transactionId: cgtHomesTx._id,
-            status: cgtHomesTransferSuccess ? "Completed" : "Failed",
-            destinationEmail: user.connectedCGTHomesEmail,
-            error: cgtHomesError,
-          },
-        },
-        packageStatus: package.status,
-        timestamp: new Date(),
+        transactionId: pendingTx._id,
+        packageId: lockedPackage._id,
+        packageStatus: lockedPackage.status,
+        status: "Pending",
       },
     });
   } catch (error) {
@@ -593,6 +449,9 @@ const getHybridWithdrawalHistory = async (req, res) => {
   }
 };
 
+// Manual-approval flow: user request only LOCKS the balance and creates a Pending
+// transaction. Crypto send + main-balance credit are performed later by admin via
+// /admin/accept-hybrid-balance-withdrawal. Rejection refunds the locked balance.
 const withdrawHybridBalance = async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -624,7 +483,7 @@ const withdrawHybridBalance = async (req, res) => {
       });
     }
 
-    // 3. Validate wallet address for USDT transaction
+    // 3. Validate wallet address (re-validated at admin accept time)
     if (!user.walletAddress || !/^0x[a-fA-F0-9]{40}$/.test(user.walletAddress)) {
       return res.status(400).json({
         success: false,
@@ -632,7 +491,22 @@ const withdrawHybridBalance = async (req, res) => {
       });
     }
 
-    // 4. ATOMIC: Deduct balance only if sufficient (prevents double-spend race condition)
+    // 4. Block if user already has an unresolved hybrid-balance request
+    const pendingWithdrawal = await Transaction.findOne({
+      userId,
+      walletName: "hybridBalance",
+      status: { $in: ["Pending", "Processing"] },
+      transactionRemark: { $regex: "^Withdraw Hybrid Balance" },
+    });
+
+    if (pendingWithdrawal) {
+      return res.status(400).json({
+        success: false,
+        message: "You already have a pending hybrid balance withdrawal request",
+      });
+    }
+
+    // 5. ATOMIC: lock balance only if sufficient (prevents double-spend race)
     const wallet = await Wallet.findOneAndUpdate(
       { userId, hybridBalance: { $gte: withdrawAmount } },
       { $inc: { hybridBalance: -withdrawAmount } },
@@ -640,7 +514,6 @@ const withdrawHybridBalance = async (req, res) => {
     );
 
     if (!wallet) {
-      // Either wallet not found or insufficient balance
       const existingWallet = await Wallet.findOne({ userId });
       if (!existingWallet) {
         return res.status(404).json({
@@ -655,69 +528,38 @@ const withdrawHybridBalance = async (req, res) => {
       });
     }
 
-    // 5. Send hybrid amount with distribution
-    const { sendHybridAmount } = require("../functions/sendHybridAmount");
+    // 6. Create Pending transaction. Admin accept will mutate this row.
+    const usdtPortion = Number((withdrawAmount * 0.50).toFixed(5));
+    const mainBalancePortion = Number((withdrawAmount * 0.30).toFixed(5));
 
-    try {
-      const result = await sendHybridAmount(withdrawAmount, userId, user.walletAddress);
+    const pendingTx = new Transaction({
+      userId,
+      walletName: "hybridBalance",
+      creditedAmount: 0,
+      debitedAmount: withdrawAmount,
+      transactionRemark: `Withdraw Hybrid Balance - $${withdrawAmount} (Awaiting admin approval)`,
+      status: "Pending",
+      toAddress: user.walletAddress,
+      currentBalance: wallet.hybridBalance,
+      metadata: {
+        withdrawalType: "HybridBalance",
+        requestedAmount: withdrawAmount,
+        usdtPortion,
+        mainBalancePortion,
+      },
+    });
+    await pendingTx.save();
 
-      // 6. Create transaction record for hybrid balance debit
-      const hybridDebitTx = new Transaction({
-        userId,
-        walletName: "hybridBalance",
-        creditedAmount: 0,
-        debitedAmount: withdrawAmount,
-        transactionRemark: `Withdraw Hybrid Balance - $${withdrawAmount} (50% USDT + 30% Main Balance)`,
-        status: "Completed",
-        currentBalance: wallet.hybridBalance,
-        metadata: {
-          withdrawalType: "HybridBalance",
-          usdtTransaction: result.usdtTransaction,
-          mainBalance: result.mainBalanceCredit,
-          txHash: result.txHash,
-        },
-      });
-      await hybridDebitTx.save();
-
-      return res.status(200).json({
-        success: true,
-        message: "Hybrid balance withdrawal initiated successfully",
-        details: {
-          withdrawalAmount: withdrawAmount,
-          mainBalanceCredit: result.mainBalanceCredit,
-          usdtTransaction: result.usdtTransaction,
-          txHash: result.txHash,
-        },
-      });
-    } catch (cryptoError) {
-      console.error("Error sending hybrid amount:", cryptoError.message);
-
-      // Refund the atomically-deducted balance since crypto send failed
-      await Wallet.findOneAndUpdate(
-        { userId },
-        { $inc: { hybridBalance: withdrawAmount } }
-      );
-
-      // Create failed transaction record
-      const failedTx = new Transaction({
-        userId,
-        walletName: "hybridBalance",
-        creditedAmount: 0,
-        debitedAmount: withdrawAmount,
-        transactionRemark: `Withdraw Hybrid Balance - Failed (Amount: ${withdrawAmount})`,
-        status: "Failed",
-        metadata: {
-          error: cryptoError.message,
-        },
-      });
-      await failedTx.save();
-
-      return res.status(500).json({
-        success: false,
-        message: "Failed to process hybrid withdrawal",
-        error: cryptoError.message,
-      });
-    }
+    return res.status(200).json({
+      success: true,
+      message: "Withdraw request submitted. Awaiting admin approval.",
+      data: {
+        transactionId: pendingTx._id,
+        requestedAmount: withdrawAmount,
+        lockedBalance: withdrawAmount,
+        status: "Pending",
+      },
+    });
   } catch (error) {
     console.error("Hybrid balance withdrawal error:", error);
     return res.status(500).json({

@@ -48,6 +48,10 @@ const checkWithdrawalLimit = async (user) => {
   return { allowed: recentCount < MAX_WITHDRAWALS_PER_WINDOW, recentCount };
 };
 
+// Manual-approval flow: validate eligibility, atomically lock the package
+// (bonusWithdrawalPending: false → true), create a Pending Transaction.
+// Admin Accept performs USDT + retopup + CGT Homes and flips bonusWithdrawn.
+// Admin Reject clears bonusWithdrawalPending so user can retry.
 const withdrawHybridBonus = async (req, res) => {
   const userId = req.user.userId;
 
@@ -82,6 +86,12 @@ const withdrawHybridBonus = async (req, res) => {
     if (pkg.bonusWithdrawn) {
       return res.status(400).json({ success: false, message: "Bonus already withdrawn" });
     }
+    if (pkg.bonusWithdrawalPending) {
+      return res.status(400).json({
+        success: false,
+        message: "Bonus withdrawal already requested. Awaiting admin approval.",
+      });
+    }
 
     const days = daysSince((pkg.rejoinCount > 0 && pkg.cycleStartedAt ? pkg.cycleStartedAt : pkg.createdAt));
     if (days < MATURITY_DAYS) {
@@ -91,114 +101,56 @@ const withdrawHybridBonus = async (req, res) => {
       });
     }
 
-    const pkgRef = String(pkg._id);
-    const inrAmount = CGT_HOMES_USD * INR_RATE;
+    // ATOMIC LOCK: only flip false→true if currently false AND bonus not withdrawn.
+    // Single op = no race even if user double-clicks.
+    const lockedPkg = await HybridPackage.findOneAndUpdate(
+      { _id: pkg._id, bonusWithdrawn: false, bonusWithdrawalPending: false },
+      { $set: { bonusWithdrawalPending: true } },
+      { new: true }
+    );
 
-    // 1. USDT payout FIRST — gate everything else on real-crypto success.
-    //    If this fails, no DB mutations happen downstream.
-    let usdtTxHash;
-    try {
-      usdtTxHash = await makeUSDTCryptoTransaction(USDT_USD, user.walletAddress);
-    } catch (err) {
-      await new Transaction({
-        userId,
-        walletName: "USDTBalance",
-        transactionRemark: `Hybrid Bonus - USDT payout FAILED (${pkgRef})`,
-        status: "Failed",
-        toAddress: user.walletAddress,
-        metadata: { packageId: pkgRef, withdrawalType: "HybridBonusRealWallet", error: err.message },
-      }).save();
-      return res.status(500).json({
+    if (!lockedPkg) {
+      return res.status(400).json({
         success: false,
-        message: "USDT payout failed. Bonus withdrawal cancelled.",
-        error: err.message,
+        message: "Unable to lock package — bonus may already be withdrawn or pending.",
       });
     }
 
-    await new Transaction({
-      userId,
-      walletName: "USDTBalance",
-      creditedAmount: USDT_USD,
-      transactionRemark: `Hybrid Bonus - Real Wallet (${pkgRef})`,
-      status: "Completed",
-      txHash: usdtTxHash,
-      toAddress: user.walletAddress,
-      metadata: { packageId: pkgRef, withdrawalType: "HybridBonusRealWallet" },
-    }).save();
-
-    // Check if current cycle started after April 20 (use cycleStartedAt if rejoined, otherwise createdAt)
-    const currentCycleDate = pkg.cycleStartedAt || pkg.createdAt;
+    const pkgRef = String(lockedPkg._id);
+    const inrAmount = CGT_HOMES_USD * INR_RATE;
+    const currentCycleDate = lockedPkg.cycleStartedAt || lockedPkg.createdAt;
     const isPostApril20 = new Date(currentCycleDate) >= APRIL_20_CUTOFF;
 
-    // 2. Retopup credit — only for pre-April 20 users
-    let retopupDone = false;
-    if (!isPostApril20) {
-      await performWalletTransaction(
-        userId,
-        RETOPUP_USD,
-        "retopupBalance",
-        `Hybrid Bonus - Retopup (${pkgRef})`,
-        "Completed",
-        { metadata: { packageId: pkgRef, withdrawalType: "HybridBonusRetopup" } }
-      );
-      retopupDone = true;
-    }
-
-    // 3. CGT Homes INR credit. USDT already sent — on failure we log for admin reconciliation, not rollback.
-    let cgtHomesOk = false;
-    let cgtHomesError = null;
-    try {
-      const resp = await axios.post(`${CGT_HOMES_API_URL}/wallet/add-balance`, {
-        email: user.connectedCGTHomesEmail,
-        amount: inrAmount,
-        transactionRemark: `Hybrid Bonus from CryptoGT - ${userId}`,
-        liveToken: CGT_HOMES_USD,
-        status: "Success",
-        source: "CryptoGT-HybridBonus",
-      });
-      cgtHomesOk = Boolean(resp.data?.success);
-      if (!cgtHomesOk) cgtHomesError = resp.data?.message || "CGT Homes credit failed";
-    } catch (err) {
-      cgtHomesError = err.message;
-    }
-
-    await new Transaction({
+    // Create Pending Transaction. Admin Accept reads metadata to drive the
+    // exact distribution computed at request time.
+    const pendingTx = new Transaction({
       userId,
       walletName: "USDTBalance",
       creditedAmount: 0,
       debitedAmount: 0,
-      transactionRemark: `Hybrid Bonus - CGT Homes Transfer (${pkgRef})`,
-      status: cgtHomesOk ? "Completed" : "Failed",
+      transactionRemark: `Hybrid Bonus - $${USDT_USD} (Awaiting admin approval, Package: ${pkgRef})`,
+      status: "Pending",
+      toAddress: user.walletAddress,
       metadata: {
+        withdrawalType: "HybridBonus",
         packageId: pkgRef,
-        withdrawalType: "HybridBonusCGTHomes",
+        usdtAmount: USDT_USD,
+        retopupAmount: isPostApril20 ? 0 : RETOPUP_USD,
+        cgtHomesUsdAmount: CGT_HOMES_USD,
         cgtHomesInrAmount: inrAmount,
         destinationEmail: user.connectedCGTHomesEmail,
-        error: cgtHomesError,
+        isPostApril20,
       },
-    }).save();
-
-    const totalBonus = isPostApril20 ? (USDT_USD + CGT_HOMES_USD) : (USDT_USD + RETOPUP_USD + CGT_HOMES_USD);
-    pkg.bonusWithdrawn = true;
-    pkg.bonusGenerated = totalBonus;
-    if (pkg.status !== "Mature") pkg.status = "Mature";
-    await pkg.save();
-
-    const successMsg = isPostApril20
-      ? (cgtHomesOk ? "Hybrid bonus withdrawn successfully ($10 USDT + $10 CGT Homes)" : "USDT done; CGT Homes credit failed and is flagged for reconciliation")
-      : (cgtHomesOk ? "Hybrid bonus withdrawn successfully" : "USDT + retopup done; CGT Homes credit failed and is flagged for reconciliation");
+    });
+    await pendingTx.save();
 
     return res.json({
       success: true,
-      message: successMsg,
+      message: "Withdraw request submitted. Awaiting admin approval.",
       data: {
+        transactionId: pendingTx._id,
         packageId: pkgRef,
-        realWalletUSDT: USDT_USD,
-        retopupUSD: retopupDone ? RETOPUP_USD : 0,
-        cgtHomesINR: inrAmount,
-        cgtHomesOk,
-        cgtHomesError,
-        txHash: usdtTxHash,
+        status: "Pending",
         isPostApril20,
       },
     });
