@@ -1,5 +1,6 @@
 const Package = require("../models/Packages");
 const HybridPackage = require("../models/HybridPackage");
+const Transaction = require("../models/Transaction");
 const { distributeDirectBonus } = require("../functions/directDistributeBonus");
 const getLiveRate = require("../utils/liveRateUtils");
 const Wallet = require("../models/Wallet");
@@ -881,67 +882,39 @@ exports.claimLevelReward = async (req, res) => {
       retopupAmount = (finalRewardAmount * 30) / 100;
     }
 
-    // STEP 1: Send crypto. If this fails, nothing has moved — revert Processing and user retries.
-    let txnHash = null;
-    try {
-      txnHash = await makeCryptoTransaction(cryptoAmount, user.walletAddress);
-    } catch (paymentError) {
-      await HybridPackage.findByIdAndUpdate(
-        packageId,
-        { $pull: { levels: { level, division: divisionValue, status: "Processing" } } }
-      );
-      return res.status(500).json({
-        success: false,
-        message: "Failed to process crypto payment",
-        error: paymentError.message,
-      });
-    }
-
-    // STEP 2: Crypto has moved — finalize Claimed immediately so the user cannot double-claim.
-    // Point of no return: secondary bookkeeping failures below must NOT roll back Claimed.
-    await HybridPackage.findOneAndUpdate(
-      {
-        _id: packageId,
-        levels: {
-          $elemMatch: { level, division: divisionValue, status: "Processing" },
-        },
-      },
-      {
-        $set: {
-          "levels.$.status": "Claimed",
-          "levels.$.claimedAt": new Date(),
-          "levels.$.rewardAmount": finalRewardAmount,
-          "levels.$.txnHash": txnHash,
-        },
-      }
-    );
-
-    // STEP 3: Retopup credit (best-effort). Claim is already Claimed — on failure we log for
-    // manual admin follow-up rather than rolling back.
-    if (retopupAmount > 0) {
-      const remark = hasDivisions
-        ? `Level ${level} Part ${division} reward (30% retopup distribution)`
-        : `Level ${level} reward (30% retopup distribution)`;
-      try {
-        await performWalletTransaction(userId, retopupAmount, "retopupBalance", remark, "Completed");
-      } catch (retopupError) {
-        console.error(
-          `[MANUAL-ACTION-REQUIRED] Retopup credit failed after successful claim ` +
-          `(user=${userId}, level=${level}, division=${divisionValue}, amount=${retopupAmount} USDT, txnHash=${txnHash}). ` +
-          `Credit retopupBalance manually.`,
-          retopupError
-        );
-      }
-    }
-
-    res.status(200).json({
-      success: true,
-      message: "Reward claimed successfully",
-      data: {
+    // Pending Transaction. The levels entry stays in "Processing" until admin acts.
+    // Admin Accept sends crypto + credits retopup + flips entry to "Claimed".
+    // Admin Reject $pulls the entry so the user can retry.
+    const label = hasDivisions ? `Level ${level} Part ${division}` : `Level ${level}`;
+    const pendingTx = new Transaction({
+      userId,
+      walletName: "USDTBalance",
+      creditedAmount: 0,
+      debitedAmount: 0,
+      transactionRemark: `${label} reward - $${finalRewardAmount} (Awaiting admin approval)`,
+      status: "Pending",
+      toAddress: user.walletAddress,
+      metadata: {
+        withdrawalType: "LevelClaim",
+        hybridPackageId: String(packageId),
         level,
         division: divisionValue,
-        rewardAmount: finalRewardAmount,
-        txnHash: txnHash || null,
+        finalRewardAmount,
+        cryptoAmount,
+        retopupAmount,
+      },
+    });
+    await pendingTx.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Claim request submitted. Awaiting admin approval.",
+      data: {
+        transactionId: pendingTx._id,
+        level,
+        division: divisionValue,
+        finalRewardAmount,
+        status: "Pending",
       },
     });
   } catch (error) {
