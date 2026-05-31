@@ -1,6 +1,7 @@
 const MatrixPackage = require("../models/MatrixPackage");
 const HybridPackage = require("../models/HybridPackage");
 const User = require("../models/User");
+const Transaction = require("../models/Transaction");
 const { makeCryptoTransaction } = require("../utils/makeUSDTCryptoTransaction");
 
 // Children required per part
@@ -370,50 +371,49 @@ const claimMatrixReward = async (req, res) => {
     const packageId = lockResult._id;
 
     const user = await User.findOne({ userId });
-    if (!user || !user.walletAddress) {
-      await MatrixPackage.findByIdAndUpdate(packageId, {
-        $set: { claimStatus: "Unclaimed" },
-      });
-      return res.status(400).json({ success: false, message: "User wallet address not found" });
+    if (!user) {
+      await MatrixPackage.findByIdAndUpdate(packageId, { $set: { claimStatus: "Unclaimed" } });
+      return res.status(404).json({ success: false, message: "User not found" });
     }
 
     const rewardAmount = stageConfig.income;
     const payoutAmount = rewardAmount * 0.9;
 
-    // STEP 1: Send crypto. If this fails, nothing has moved — revert and let user retry.
-    let txnHash;
-    try {
-      txnHash = await makeCryptoTransaction(payoutAmount, user.walletAddress);
-    } catch (paymentError) {
-      await MatrixPackage.findByIdAndUpdate(packageId, {
-        $set: { claimStatus: "Unclaimed" },
-      });
-      return res.status(500).json({
-        success: false,
-        message: "Failed to process crypto payment",
-        error: paymentError.message,
-      });
-    }
-
-    // STEP 2: Crypto has moved — finalize Claimed. Point of no return.
-    await MatrixPackage.findByIdAndUpdate(packageId, {
-      $set: {
-        claimStatus: "Claimed",
-        claimedAt: new Date(),
+    const pendingTx = new Transaction({
+      userId,
+      walletName: "USDTBalance",
+      creditedAmount: 0,
+      debitedAmount: 0,
+      transactionRemark: `Matrix HM${hm} Part${part} reward - $${rewardAmount} (Awaiting admin approval)`,
+      status: "Pending",
+      toAddress: user.walletAddress,
+      metadata: {
+        withdrawalType: "MatrixClaim",
+        matrixPackageId: String(packageId),
+        hm,
+        part,
         rewardAmount,
-        txnHash,
+        payoutAmount,
       },
     });
+    await pendingTx.save();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: "Matrix reward claimed successfully",
-      data: { hm, part, rewardAmount, txnHash },
+      message: "Claim request submitted. Awaiting admin approval.",
+      data: {
+        transactionId: pendingTx._id,
+        hm,
+        part,
+        rewardAmount,
+        payoutAmount,
+        status: "Pending",
+      },
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      message: "Failed to claim matrix reward",
+      message: "Failed to submit matrix claim request",
       error: error.message,
     });
   }
