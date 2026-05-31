@@ -54,6 +54,10 @@ const hybridPackageSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    bonusWithdrawalPending: {
+      type: Boolean,
+      default: false,
+    },
     cycleStartedAt: {
       type: Date,
       default: null,

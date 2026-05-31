@@ -57,7 +57,7 @@ const packageSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["Active", "Inactive", "Requested", "Matured"],
+      enum: ["Active", "Inactive", "Requested", "Matured", "PendingWithdraw"],
       default: "Requested",
     },
   },
