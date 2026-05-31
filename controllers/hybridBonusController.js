@@ -5,7 +5,6 @@ const User = require("../models/User");
 const HybridPackage = require("../models/HybridPackage");
 const Transaction = require("../models/Transaction");
 const { performWalletTransaction } = require("../utils/performWalletTransaction");
-const { makeCryptoTransaction: makeUSDTCryptoTransaction } = require("../utils/makeUSDTCryptoTransaction");
 
 dotenv.config();
 
