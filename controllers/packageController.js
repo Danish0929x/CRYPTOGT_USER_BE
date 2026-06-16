@@ -267,7 +267,16 @@ exports.reTopUp = async (req, res) => {
 exports.createHybridPackage = async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { txnId } = req.body;
+    const { txnId, amount } = req.body;
+    const hybridAmount = amount || 10; // Default to 10 if not specified
+    const ALLOWED_HYBRID_AMOUNTS = new Set([10, 50, 100]);
+
+    if (!ALLOWED_HYBRID_AMOUNTS.has(hybridAmount)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid hybrid amount. Allowed amounts: 10, 50, 100 USDT.`,
+      });
+    }
 
     // Validate user exists
     const user = await User.findOne({ userId: userId });
@@ -383,6 +392,21 @@ exports.createHybridPackage = async (req, res) => {
         }
       } catch (matrixError) {
         // Matrix entry failure should not block hybrid package creation
+      }
+    }
+
+    // Credit 25% of hybrid package amount to parent's hybrid balance
+    if (user.parentId) {
+      try {
+        const parentWallet = await Wallet.findOne({ userId: user.parentId });
+        if (parentWallet) {
+          const parentBonus = hybridAmount * 0.25; // 25% of the hybrid amount
+          parentWallet.hybridBalance += parentBonus;
+          await parentWallet.save();
+        }
+      } catch (walletError) {
+        console.error("Error crediting parent hybrid balance:", walletError);
+        // Don't block package creation if wallet credit fails
       }
     }
 
