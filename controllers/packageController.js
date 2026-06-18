@@ -268,7 +268,7 @@ exports.createHybridPackage = async (req, res) => {
   try {
     const userId = req.user.userId;
     const { txnId, amount } = req.body;
-    const hybridAmount = amount || 10; // Default to 10 if not specified
+    const hybridAmount = Number(amount) || 10; // Convert to number, default to 10 if not specified
     const ALLOWED_HYBRID_AMOUNTS = new Set([10, 50, 100]);
 
     if (!ALLOWED_HYBRID_AMOUNTS.has(hybridAmount)) {
@@ -349,12 +349,13 @@ exports.createHybridPackage = async (req, res) => {
       parentPackageId = parentPkg?._id || null;
     }
 
-    // Create new hybrid package with fixed amount of 10 USDT
+    // Create new hybrid package with the specified amount
     const newHybridPackage = new HybridPackage({
       userId,
       position: newPosition,
       parentPackageId,
       txnId: txnId || null,
+      amount: hybridAmount,
       status: "Active",
     });
 
@@ -488,8 +489,8 @@ exports.getHybridPackageByUserId = async (req, res) => {
     })
       .sort({ createdAt: -1 });
 
-    // Calculate total investment in Hybrid packages (fixed 10 USDT per package)
-    const totalHybridInvestment = hybridPackages.length * 10;
+    // Calculate total investment in Hybrid packages (sum of actual amounts)
+    const totalHybridInvestment = hybridPackages.reduce((sum, pkg) => sum + (pkg.amount || 10), 0);
 
     // Count direct hybrid members: users with this userId as parentId who have hybrid packages
     let directHybridCount = 0;
@@ -585,7 +586,7 @@ exports.getDirectHybridPackages = async (req, res) => {
       userId: { $in: directUserIds },
     })
       .sort({ createdAt: -1 })
-      .select("userId status createdAt");
+      .select("userId status createdAt amount");
 
     // Get user details for display
     const userDetails = await User.find({ userId: { $in: directUserIds } }).select("userId name");
@@ -594,8 +595,8 @@ exports.getDirectHybridPackages = async (req, res) => {
       userMap[user.userId] = user.name;
     });
 
-    // Calculate total investment in Direct Hybrid packages (fixed 10 USDT per package)
-    const totalDirectHybridInvestment = directHybridPackages.length * 10;
+    // Calculate total investment in Direct Hybrid packages (sum of actual amounts)
+    const totalDirectHybridInvestment = directHybridPackages.reduce((sum, pkg) => sum + (pkg.amount || 10), 0);
 
     res.status(200).json({
       success: true,
@@ -606,7 +607,7 @@ exports.getDirectHybridPackages = async (req, res) => {
         id: pkg._id,
         userId: pkg.userId,
         userName: userMap[pkg.userId] || "N/A",
-        amount: 10,
+        amount: pkg.amount || 10,
         type: "Hybrid",
         status: pkg.status,
         createdAt: pkg.createdAt,
