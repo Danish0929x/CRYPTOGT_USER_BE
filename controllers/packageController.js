@@ -1037,3 +1037,121 @@ exports.getMatrixTreeFromHybrid = async (req, res) => {
     });
   }
 };
+
+exports.getHybridSalaryReward = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    // Get all direct children of current user
+    const directChildren = await User.find(
+      { parentId: userId },
+      { userId: 1, name: 1, createdAt: 1 }
+    ).lean();
+
+    if (!directChildren || directChildren.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: "No direct referrals found",
+        data: {
+          strongLegs: [],
+          allLegs: [],
+        },
+      });
+    }
+
+    // For each direct child, calculate total hybrid investment in their downline
+    const legsWithInvestment = await Promise.all(
+      directChildren.map(async (child) => {
+        // Get all descendants of this child (including the child itself)
+        const descendantData = await User.aggregate([
+          { $match: { userId: child.userId } },
+          {
+            $graphLookup: {
+              from: "users",
+              startWith: "$userId",
+              connectFromField: "userId",
+              connectToField: "parentId",
+              as: "descendants",
+              maxDepth: 100,
+            },
+          },
+          {
+            $project: {
+              allUserIds: {
+                $concatArrays: [
+                  [{ userId: "$userId" }],
+                  {
+                    $map: {
+                      input: "$descendants",
+                      as: "desc",
+                      in: { userId: "$$desc.userId" },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        ]);
+
+        const allUserIds = descendantData[0]?.allUserIds?.map((u) => u.userId) || [
+          child.userId,
+        ];
+
+        // Sum hybrid packages for this child and all their descendants
+        const investmentResult = await HybridPackage.aggregate([
+          {
+            $match: {
+              userId: { $in: allUserIds },
+              status: { $in: ["Active", "active"] },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              totalInvestment: { $sum: "$amount" },
+            },
+          },
+        ]);
+
+        const totalHybridInvestment = investmentResult[0]?.totalInvestment || 0;
+
+        // Count direct children of this child
+        const directChildCount = await User.countDocuments({
+          parentId: child.userId,
+        });
+
+        return {
+          userId: child.userId,
+          name: child.name || "Unknown",
+          totalHybridInvestment,
+          directChildCount,
+          joinDate: child.createdAt,
+        };
+      })
+    );
+
+    // Sort by total investment descending
+    const sortedLegs = legsWithInvestment.sort(
+      (a, b) => b.totalHybridInvestment - a.totalHybridInvestment
+    );
+
+    // Top 2 are strong legs
+    const strongLegs = sortedLegs.slice(0, 2);
+
+    res.status(200).json({
+      success: true,
+      message: "Hybrid salary reward data fetched successfully",
+      data: {
+        strongLegs,
+        allLegs: sortedLegs,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching hybrid salary reward:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch hybrid salary reward data",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};
