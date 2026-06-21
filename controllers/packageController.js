@@ -1135,8 +1135,29 @@ exports.getHybridSalaryReward = async (req, res) => {
       (a, b) => b.totalHybridInvestment - a.totalHybridInvestment
     );
 
-    // Top 2 are strong legs
-    const strongLegs = sortedLegs.slice(0, 2);
+    // Strong leg = highest investment
+    // Weak leg = sum of all remaining members
+    const strongLeg = sortedLegs[0];
+    const remainingLegs = sortedLegs.slice(1);
+    const weakLegTotalInvestment = remainingLegs.reduce(
+      (sum, leg) => sum + leg.totalHybridInvestment,
+      0
+    );
+    const weakLegDirectChildCount = remainingLegs.reduce(
+      (sum, leg) => sum + leg.directChildCount,
+      0
+    );
+
+    const strongLegs = [
+      strongLeg,
+      {
+        userId: "combined",
+        name: "Weak Leg (Combined)",
+        totalHybridInvestment: weakLegTotalInvestment,
+        directChildCount: weakLegDirectChildCount,
+        joinDate: new Date(),
+      },
+    ];
 
     res.status(200).json({
       success: true,
