@@ -9,14 +9,17 @@ exports.register = async (req, res) => {
 
     // Validate required fields
     if (!walletAddress) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Wallet address is required" 
+      return res.status(400).json({
+        success: false,
+        message: "Wallet address is required"
       });
     }
 
+    // Normalize wallet address to lowercase for case-insensitive comparison
+    const normalizedWalletAddress = walletAddress.toLowerCase();
+
     // Check if wallet address already exists
-    const existingUser = await User.findOne({ walletAddress });
+    const existingUser = await User.findOne({ walletAddress: normalizedWalletAddress });
     if (existingUser) {
       return res.status(400).json({ 
         success: false, 
@@ -52,7 +55,7 @@ exports.register = async (req, res) => {
     }
     // Create user with required fields from model
     const user = await User.create({
-      walletAddress,
+      walletAddress: normalizedWalletAddress,
       userId,
       name: name || null,
       email: email || null,
@@ -76,7 +79,7 @@ exports.register = async (req, res) => {
       success: true,
       message: "Registration successful",
       data: {
-        walletAddress,
+        walletAddress: normalizedWalletAddress,
         userId,
         parentId,
         name,
@@ -101,14 +104,17 @@ exports.login = async (req, res) => {
 
     // Validate required field
     if (!walletAddress) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         success: false,
-        message: "Wallet address is required" 
+        message: "Wallet address is required"
       });
     }
 
+    // Normalize wallet address to lowercase for case-insensitive comparison
+    const normalizedWalletAddress = walletAddress.toLowerCase();
+
     // Find user by wallet address
-    const user = await User.findOne({ walletAddress });
+    const user = await User.findOne({ walletAddress: normalizedWalletAddress });
     if (!user) {
       return res.status(404).json({ 
         success: false,
@@ -126,12 +132,12 @@ exports.login = async (req, res) => {
 
     // Generate JWT token
     const token = jwt.sign(
-      { 
-        userId: user.userId, 
-        walletAddress: user.walletAddress,
-        id: user._id 
-      }, 
-      process.env.JWT_SECRET, 
+      {
+        userId: user.userId,
+        walletAddress: normalizedWalletAddress,
+        id: user._id
+      },
+      process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 
