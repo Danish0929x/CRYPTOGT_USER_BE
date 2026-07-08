@@ -19,6 +19,8 @@ const userSchema = new mongoose.Schema(
     email: {
       type: String,
       default: null,
+      unique: true,
+      sparse: true,
     },
     phone: {
       type: String,
@@ -60,10 +62,26 @@ const userSchema = new mongoose.Schema(
      connectedCGTHomesEmail: {
       type: String,
       default: null,
-      sparse: true, // Allows multiple null values but unique non-null values
+      sparse: true,
     },
-    // NEW FIELD: Connection timestamp
     cgtHomesConnectedAt: {
+      type: Date,
+      default: null,
+    },
+    password: {
+      type: String,
+      default: null,
+      sparse: true,
+    },
+    isEmailVerified: {
+      type: Boolean,
+      default: false,
+    },
+    resetOTP: {
+      type: String,
+      default: null,
+    },
+    resetOTPExpiresAt: {
       type: Date,
       default: null,
     },
