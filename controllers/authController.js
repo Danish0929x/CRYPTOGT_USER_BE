@@ -480,7 +480,9 @@ exports.sendResetOTP = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "OTP sent to registered email"
+      message: "OTP sent to registered email",
+      email: user.email,
+      emailHint: user.email ? `${user.email.substring(0, 3)}${"*".repeat(user.email.indexOf("@") - 3)}${user.email.substring(user.email.indexOf("@"))}` : "registered email"
     });
   } catch (err) {
     console.error("Send OTP error:", err);
