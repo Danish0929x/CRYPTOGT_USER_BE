@@ -2,8 +2,9 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const Wallet = require("../models/Wallet");
 const { hashPassword, comparePassword } = require("../utils/passwordUtils");
-const { generateOTPWithExpiry, validateOTP } = require("../utils/otpUtils");
 const { sendOTPEmail, sendTemporaryPasswordEmail } = require("../utils/emailService");
+const { sendOTP, verifyOTP } = require("../utils/smsService");
+const ResetOtp = require("../models/ResetOtp");
 
 exports.register = async (req, res) => {
   try {
@@ -465,24 +466,57 @@ exports.sendResetOTP = async (req, res) => {
       });
     }
 
-    const otpData = generateOTPWithExpiry();
-    user.resetOTP = otpData.otp;
-    user.resetOTPExpiresAt = otpData.expiresAt;
-    await user.save();
-
-    try {
-      if (user.email) {
-        await sendOTPEmail(user.email, otpData.otp);
-      }
-    } catch (emailError) {
-      console.error("Email sending failed:", emailError);
+    if (!user.phone) {
+      return res.status(400).json({
+        success: false,
+        message: "No registered phone number found for this user"
+      });
     }
+
+    // Prevent spam: 60 second cooldown between OTP requests
+    const recentOtp = await ResetOtp.findOne({
+      userId: user.userId,
+      purpose: "resetPassword",
+      createdAt: { $gte: new Date(Date.now() - 60 * 1000) },
+    });
+
+    if (recentOtp) {
+      return res.status(429).json({
+        success: false,
+        message: "OTP already sent. Please wait 60 seconds before requesting again."
+      });
+    }
+
+    // Send OTP via 2Factor.in (AUTOGEN — 2Factor generates the code)
+    const phone = user.phone.startsWith("91") ? user.phone : `91${user.phone}`;
+    let sessionId;
+    try {
+      sessionId = await sendOTP(phone);
+    } catch (smsError) {
+      console.error("Reset OTP sending failed:", smsError);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to send OTP. Please try again later."
+      });
+    }
+
+    // Store the session ID (remove any previous ones for this user)
+    await ResetOtp.deleteMany({ userId: user.userId, purpose: "resetPassword" });
+    await ResetOtp.create({
+      userId: user.userId,
+      sessionId,
+      purpose: "resetPassword",
+    });
+
+    const digits = String(user.phone).replace(/\D/g, "");
+    const phoneHint = digits.length >= 4
+      ? `${"*".repeat(digits.length - 4)}${digits.slice(-4)}`
+      : "registered phone";
 
     res.status(200).json({
       success: true,
-      message: "OTP sent to registered email",
-      email: user.email,
-      emailHint: user.email ? `${user.email.substring(0, 3)}${"*".repeat(user.email.indexOf("@") - 3)}${user.email.substring(user.email.indexOf("@"))}` : "registered email"
+      message: "OTP sent to your registered phone number",
+      phoneHint
     });
   } catch (err) {
     console.error("Send OTP error:", err);
@@ -513,13 +547,41 @@ exports.verifyResetOTP = async (req, res) => {
       });
     }
 
-    const validation = validateOTP(otp, user.resetOTP, user.resetOTPExpiresAt);
-    if (!validation.isValid) {
+    // Look up the 2Factor session for this user
+    const resetOtp = await ResetOtp.findOne({
+      userId: user.userId,
+      purpose: "resetPassword",
+    }).sort({ createdAt: -1 });
+
+    if (!resetOtp) {
       return res.status(400).json({
         success: false,
-        message: validation.message
+        message: "OTP not found or expired. Please request a new one."
       });
     }
+
+    // Verify the code with 2Factor.in
+    let isValid;
+    try {
+      isValid = await verifyOTP(resetOtp.sessionId, otp);
+    } catch (verifyError) {
+      console.error("Reset OTP verification failed:", verifyError);
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired OTP"
+      });
+    }
+
+    if (!isValid) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid OTP"
+      });
+    }
+
+    // Mark verified and clean up the session
+    resetOtp.verified = true;
+    await resetOtp.save();
 
     res.status(200).json({
       success: true,
