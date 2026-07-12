@@ -1,10 +1,28 @@
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const User = require("../models/User");
 const Wallet = require("../models/Wallet");
 const { hashPassword, comparePassword } = require("../utils/passwordUtils");
 const { sendOTPEmail, sendTemporaryPasswordEmail } = require("../utils/emailService");
-const { sendOTP, verifyOTP } = require("../utils/smsService");
+const { sendOTP, sendCustomOTP, verifyOTP } = require("../utils/smsService");
 const ResetOtp = require("../models/ResetOtp");
+
+// --- Password-reset OTP helpers ---------------------------------------------
+const hashOTP = (otp) => crypto.createHash("sha256").update(String(otp)).digest("hex");
+
+const generateOTP = () => String(Math.floor(100000 + Math.random() * 900000));
+
+const maskPhone = (phone) => {
+  const d = String(phone || "").replace(/\D/g, "");
+  return d.length >= 4 ? `${"*".repeat(d.length - 4)}${d.slice(-4)}` : "registered phone";
+};
+
+const maskEmail = (email) => {
+  const [local, domain] = String(email || "").split("@");
+  if (!local || !domain) return "registered email";
+  const shown = local.slice(0, 2);
+  return `${shown}${"*".repeat(Math.max(local.length - shown.length, 1))}@${domain}`;
+};
 
 exports.register = async (req, res) => {
   try {
@@ -449,7 +467,9 @@ exports.resetPassword = async (req, res) => {
 
 exports.sendResetOTP = async (req, res) => {
   try {
-    const { userId } = req.body;
+    // channel: "email" (default) | "mobile". Email is offered first; the client
+    // can re-request on "mobile" to deliver the code by SMS instead.
+    const { userId, channel = "email" } = req.body;
 
     if (!userId) {
       return res.status(400).json({
@@ -457,6 +477,8 @@ exports.sendResetOTP = async (req, res) => {
         message: "User ID is required"
       });
     }
+
+    const requestedChannel = channel === "mobile" ? "mobile" : "email";
 
     const user = await User.findOne({ userId: userId.toUpperCase() });
     if (!user) {
@@ -466,57 +488,86 @@ exports.sendResetOTP = async (req, res) => {
       });
     }
 
-    if (!user.phone) {
+    const hasEmail = !!user.email;
+    const hasPhone = !!user.phone;
+
+    if (!hasEmail && !hasPhone) {
       return res.status(400).json({
         success: false,
-        message: "No registered phone number found for this user"
+        message: "No registered email or phone number found for this user"
       });
     }
 
-    // Prevent spam: 60 second cooldown between OTP requests
+    if (requestedChannel === "email" && !hasEmail) {
+      return res.status(400).json({
+        success: false,
+        message: "No registered email found for this user. Please request the OTP on your mobile.",
+        availableChannels: { email: false, mobile: hasPhone },
+      });
+    }
+
+    if (requestedChannel === "mobile" && !hasPhone) {
+      return res.status(400).json({
+        success: false,
+        message: "No registered phone number found for this user. Please request the OTP on your email.",
+        availableChannels: { email: hasEmail, mobile: false },
+      });
+    }
+
+    // Prevent spam: 60 second cooldown per channel (switching channels is allowed)
     const recentOtp = await ResetOtp.findOne({
       userId: user.userId,
       purpose: "resetPassword",
+      channel: requestedChannel,
       createdAt: { $gte: new Date(Date.now() - 60 * 1000) },
     });
 
     if (recentOtp) {
       return res.status(429).json({
         success: false,
-        message: "OTP already sent. Please wait 60 seconds before requesting again."
+        message: `OTP already sent to your ${requestedChannel === "mobile" ? "mobile" : "email"}. Please wait 60 seconds before requesting again.`
       });
     }
 
-    // Send OTP via 2Factor.in (AUTOGEN — 2Factor generates the code)
-    const phone = user.phone.startsWith("91") ? user.phone : `91${user.phone}`;
-    let sessionId;
+    // Generate a single 6-digit code we control, so it can go over any channel.
+    const otp = generateOTP();
+
     try {
-      sessionId = await sendOTP(phone);
-    } catch (smsError) {
-      console.error("Reset OTP sending failed:", smsError);
+      if (requestedChannel === "mobile") {
+        const phone = user.phone.startsWith("91") ? user.phone : `91${user.phone}`;
+        await sendCustomOTP(phone, otp);
+      } else {
+        await sendOTPEmail(user.email, otp);
+      }
+    } catch (sendError) {
+      console.error(`Reset OTP sending failed (${requestedChannel}):`, sendError);
       return res.status(500).json({
         success: false,
-        message: "Failed to send OTP. Please try again later."
+        message: `Failed to send OTP to your ${requestedChannel === "mobile" ? "mobile" : "email"}. Please try again later.`
       });
     }
 
-    // Store the session ID (remove any previous ones for this user)
+    // Replace any previous OTP for this user with the latest one.
     await ResetOtp.deleteMany({ userId: user.userId, purpose: "resetPassword" });
     await ResetOtp.create({
       userId: user.userId,
-      sessionId,
+      otpHash: hashOTP(otp),
+      channel: requestedChannel,
       purpose: "resetPassword",
     });
 
-    const digits = String(user.phone).replace(/\D/g, "");
-    const phoneHint = digits.length >= 4
-      ? `${"*".repeat(digits.length - 4)}${digits.slice(-4)}`
-      : "registered phone";
+    const phoneHint = maskPhone(user.phone);
+    const emailHint = maskEmail(user.email);
+    const sentTo = requestedChannel === "mobile" ? phoneHint : emailHint;
 
     res.status(200).json({
       success: true,
-      message: "OTP sent to your registered phone number",
-      phoneHint
+      message: `OTP sent to your registered ${requestedChannel === "mobile" ? "mobile number" : "email"}`,
+      channel: requestedChannel,
+      sentTo,
+      phoneHint,
+      emailHint,
+      availableChannels: { email: hasEmail, mobile: hasPhone },
     });
   } catch (err) {
     console.error("Send OTP error:", err);
@@ -547,7 +598,7 @@ exports.verifyResetOTP = async (req, res) => {
       });
     }
 
-    // Look up the 2Factor session for this user
+    // Look up the latest OTP record for this user
     const resetOtp = await ResetOtp.findOne({
       userId: user.userId,
       purpose: "resetPassword",
@@ -560,10 +611,17 @@ exports.verifyResetOTP = async (req, res) => {
       });
     }
 
-    // Verify the code with 2Factor.in
+    // Verify: server-generated codes are checked locally; legacy 2Factor AUTOGEN
+    // sessions (sessionId, no otpHash) fall back to 2Factor VERIFY.
     let isValid;
     try {
-      isValid = await verifyOTP(resetOtp.sessionId, otp);
+      if (resetOtp.otpHash) {
+        isValid = resetOtp.otpHash === hashOTP(otp);
+      } else if (resetOtp.sessionId) {
+        isValid = await verifyOTP(resetOtp.sessionId, otp);
+      } else {
+        isValid = false;
+      }
     } catch (verifyError) {
       console.error("Reset OTP verification failed:", verifyError);
       return res.status(400).json({

@@ -6,11 +6,20 @@ const resetOtpSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
-    // 2Factor.in session ID returned by AUTOGEN. The actual OTP code is held by
-    // 2Factor and is never stored here.
+    // Legacy 2Factor.in AUTOGEN session ID (kept optional for in-flight sessions).
     sessionId: {
       type: String,
-      required: true,
+      default: null,
+    },
+    // SHA-256 hash of the server-generated OTP. Verified locally.
+    otpHash: {
+      type: String,
+      default: null,
+    },
+    // Channel the latest OTP was sent through: "email" | "mobile".
+    channel: {
+      type: String,
+      default: "email",
     },
     purpose: {
       type: String,
