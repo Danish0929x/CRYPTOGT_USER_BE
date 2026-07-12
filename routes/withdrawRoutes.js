@@ -10,6 +10,7 @@ router.post("/withdraw-hybrid", authMiddleware, withdrawController.withdrawHybri
 router.post("/withdraw-hybrid-balance", authMiddleware, withdrawController.withdrawHybridBalance);
 router.post("/withdraw-hybrid-bonus", authMiddleware, hybridBonusController.withdrawHybridBonus);
 router.post("/rejoin-hybrid", authMiddleware, hybridBonusController.rejoinHybrid);
+router.post("/claim-cgthomes-bonus", authMiddleware, hybridBonusController.claimCGTHomesBonus);
 router.get("/hybrid-withdrawal-history", authMiddleware, withdrawController.getHybridWithdrawalHistory);
 
 module.exports = router;

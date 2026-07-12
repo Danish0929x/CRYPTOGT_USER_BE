@@ -62,6 +62,14 @@ const hybridPackageSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    cgtHomesBonusClaimed: {
+      type: Boolean,
+      default: false,
+    },
+    cgtHomesBonusClaimedAt: {
+      type: Date,
+      default: null,
+    },
     cycleStartedAt: {
       type: Date,
       default: null,

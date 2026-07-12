@@ -15,6 +15,7 @@ const USDT_USD = 10;
 const RETOPUP_USD = 10;
 const CGT_HOMES_USD = 10;
 const INR_RATE = 95;
+const CGT_HOMES_JOIN_BONUS_INR = 1000;
 const MATURITY_DAYS = 100;
 const MAX_WITHDRAWALS_PER_WINDOW = 5;
 const WINDOW_HOURS = 48;
@@ -205,6 +206,8 @@ const rejoinHybrid = async (req, res) => {
     pkg.cycleStartedAt = new Date();
     pkg.bonusWithdrawn = false;
     pkg.bonusGenerated = 0;
+    pkg.cgtHomesBonusClaimed = false;
+    pkg.cgtHomesBonusClaimedAt = null;
     pkg.rejoinCount = (pkg.rejoinCount || 0) + 1;
     if (paidMode) pkg.txnId = txnId;
     await pkg.save();
@@ -338,4 +341,108 @@ const rejoinHybrid = async (req, res) => {
   }
 };
 
-module.exports = { withdrawHybridBonus, rejoinHybrid };
+const claimCGTHomesBonus = async (req, res) => {
+  const userId = req.user.userId;
+
+  try {
+    const user = await User.findOne({ userId });
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    if (!user.connectedCGTHomesEmail) {
+      return res.status(400).json({
+        success: false,
+        message: "CGT Homes account not connected. Please connect your CGT Homes account before claiming the bonus.",
+        code: "CGT_HOMES_NOT_CONNECTED",
+      });
+    }
+
+    const pkg = await HybridPackage.findOne({ userId }).sort({ createdAt: 1 });
+    if (!pkg) {
+      return res.status(400).json({
+        success: false,
+        message: "No hybrid package found. Activate a hybrid package before claiming the bonus.",
+      });
+    }
+
+    const lockedPkg = await HybridPackage.findOneAndUpdate(
+      { _id: pkg._id, cgtHomesBonusClaimed: false },
+      { $set: { cgtHomesBonusClaimed: true, cgtHomesBonusClaimedAt: new Date() } },
+      { new: true }
+    );
+
+    if (!lockedPkg) {
+      return res.status(400).json({
+        success: false,
+        message: "CGT Homes bonus already claimed for this hybrid cycle.",
+      });
+    }
+
+    const pkgRef = String(lockedPkg._id);
+    const inrAmount = CGT_HOMES_JOIN_BONUS_INR;
+
+    let cgtHomesOk = false;
+    let cgtHomesError = null;
+    try {
+      const resp = await axios.post(`${CGT_HOMES_API_URL}/wallet/add-balance`, {
+        email: user.connectedCGTHomesEmail,
+        amount: inrAmount,
+        transactionRemark: `Hybrid Join Bonus from CryptoGT - ${userId}`,
+        liveToken: inrAmount,
+        status: "Success",
+        source: "CryptoGT-HybridJoinBonus",
+      });
+      cgtHomesOk = Boolean(resp.data?.success);
+      if (!cgtHomesOk) cgtHomesError = resp.data?.message || "CGT Homes credit failed";
+    } catch (err) {
+      cgtHomesError = err.message;
+    }
+
+    if (!cgtHomesOk) {
+      await HybridPackage.findByIdAndUpdate(pkg._id, {
+        $set: { cgtHomesBonusClaimed: false, cgtHomesBonusClaimedAt: null },
+      });
+      console.error(
+        `[CGT-HOMES-BONUS] credit failed (user=${userId}, packageId=${pkgRef}, amount=${inrAmount} INR): ${cgtHomesError}`
+      );
+      return res.status(502).json({
+        success: false,
+        message: "Failed to credit CGT Homes bonus. Please try again.",
+        error: cgtHomesError,
+      });
+    }
+
+    await new Transaction({
+      userId,
+      walletName: "USDTBalance",
+      creditedAmount: 0,
+      debitedAmount: 0,
+      transactionRemark: `Hybrid Join Bonus - CGT Homes Credit ${inrAmount} INR (${pkgRef})`,
+      status: "Completed",
+      metadata: {
+        packageId: pkgRef,
+        withdrawalType: "HybridCGTHomesJoinBonus",
+        cgtHomesInrAmount: inrAmount,
+        destinationEmail: user.connectedCGTHomesEmail,
+      },
+    }).save();
+
+    return res.json({
+      success: true,
+      message: `${inrAmount} INR CGT Homes bonus credited successfully.`,
+      data: {
+        packageId: pkgRef,
+        cgtHomesInrAmount: inrAmount,
+        destinationEmail: user.connectedCGTHomesEmail,
+      },
+    });
+  } catch (error) {
+    console.error("claimCGTHomesBonus error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while claiming CGT Homes bonus",
+      error: error.message,
+    });
+  }
+};
+
+module.exports = { withdrawHybridBonus, rejoinHybrid, claimCGTHomesBonus };
