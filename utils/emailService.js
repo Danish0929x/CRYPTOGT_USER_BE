@@ -1,17 +1,22 @@
 const nodemailer = require('nodemailer');
 
+// Mailjet SMTP relay via nodemailer (Gmail SMTP hit its daily sending limit).
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'in-v3.mailjet.com',
+  port: 587,
   auth: {
-    user: process.env.SMTP_MAIL || process.env.EMAIL_USER,
-    pass: process.env.SMTP_PASSWORD || process.env.EMAIL_PASSWORD
+    user: process.env.MAILJET_API_KEY,
+    pass: process.env.MAILJET_SECRET_KEY
   }
 });
+
+// Mailjet requires the sender to be a verified address.
+const FROM = process.env.MAILJET_FROM || process.env.SMTP_MAIL || process.env.EMAIL_USER;
 
 async function sendOTPEmail(email, otp) {
   try {
     const mailOptions = {
-      from: process.env.SMTP_MAIL || process.env.EMAIL_USER,
+      from: FROM,
       to: email,
       subject: 'CryptoGT - Password Reset OTP',
       html: `
@@ -40,7 +45,7 @@ async function sendOTPEmail(email, otp) {
 async function sendTemporaryPasswordEmail(email, userId, temporaryPassword) {
   try {
     const mailOptions = {
-      from: process.env.SMTP_MAIL || process.env.EMAIL_USER,
+      from: FROM,
       to: email,
       subject: 'Your CryptoGT Account - Temporary Password',
       html: `
@@ -69,7 +74,7 @@ async function sendTemporaryPasswordEmail(email, userId, temporaryPassword) {
 async function sendPasswordChangedEmail(email, userId) {
   try {
     const mailOptions = {
-      from: process.env.EMAIL_USER,
+      from: FROM,
       to: email,
       subject: 'CryptoGT - Password Changed Successfully',
       html: `
