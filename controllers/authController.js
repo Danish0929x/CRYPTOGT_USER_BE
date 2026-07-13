@@ -532,18 +532,35 @@ exports.sendResetOTP = async (req, res) => {
     // Generate a single 6-digit code we control, so it can go over any channel.
     const otp = generateOTP();
 
+    const sendSms = async () => {
+      const phone = user.phone.startsWith("91") ? user.phone : `91${user.phone}`;
+      await sendCustomOTP(phone, otp);
+    };
+
+    // Track where the OTP actually landed — email delivery can fail (e.g. Gmail
+    // daily limit), in which case we fall back to SMS so the user isn't stranded.
+    let deliveredChannel = requestedChannel;
     try {
       if (requestedChannel === "mobile") {
-        const phone = user.phone.startsWith("91") ? user.phone : `91${user.phone}`;
-        await sendCustomOTP(phone, otp);
+        await sendSms();
       } else {
-        await sendOTPEmail(user.email, otp);
+        try {
+          await sendOTPEmail(user.email, otp);
+        } catch (emailError) {
+          if (hasPhone) {
+            console.error("Reset OTP email failed, falling back to SMS:", emailError.message);
+            await sendSms();
+            deliveredChannel = "mobile";
+          } else {
+            throw emailError;
+          }
+        }
       }
     } catch (sendError) {
       console.error(`Reset OTP sending failed (${requestedChannel}):`, sendError);
       return res.status(500).json({
         success: false,
-        message: `Failed to send OTP to your ${requestedChannel === "mobile" ? "mobile" : "email"}. Please try again later.`
+        message: "Failed to send OTP. Please try again later."
       });
     }
 
@@ -552,18 +569,19 @@ exports.sendResetOTP = async (req, res) => {
     await ResetOtp.create({
       userId: user.userId,
       otpHash: hashOTP(otp),
-      channel: requestedChannel,
+      channel: deliveredChannel,
       purpose: "resetPassword",
     });
 
     const phoneHint = maskPhone(user.phone);
     const emailHint = maskEmail(user.email);
-    const sentTo = requestedChannel === "mobile" ? phoneHint : emailHint;
+    const sentTo = deliveredChannel === "mobile" ? phoneHint : emailHint;
 
     res.status(200).json({
       success: true,
-      message: `OTP sent to your registered ${requestedChannel === "mobile" ? "mobile number" : "email"}`,
-      channel: requestedChannel,
+      message: `OTP sent to your registered ${deliveredChannel === "mobile" ? "mobile number" : "email"}`,
+      channel: deliveredChannel,
+      fallbackToMobile: deliveredChannel !== requestedChannel,
       sentTo,
       phoneHint,
       emailHint,
