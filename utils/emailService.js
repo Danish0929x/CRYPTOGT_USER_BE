@@ -1,17 +1,14 @@
 const nodemailer = require('nodemailer');
 
-// Mailjet SMTP relay via nodemailer (Gmail SMTP hit its daily sending limit).
 const transporter = nodemailer.createTransport({
-  host: 'in-v3.mailjet.com',
-  port: 587,
+  service: 'gmail',
   auth: {
-    user: process.env.MAILJET_API_KEY,
-    pass: process.env.MAILJET_SECRET_KEY
+    user: process.env.SMTP_MAIL || process.env.EMAIL_USER,
+    pass: process.env.SMTP_PASSWORD || process.env.EMAIL_PASSWORD
   }
 });
 
-// Mailjet requires the sender to be a verified address.
-const FROM = process.env.MAILJET_FROM || process.env.SMTP_MAIL || process.env.EMAIL_USER;
+const FROM = process.env.SMTP_MAIL || process.env.EMAIL_USER;
 
 async function sendOTPEmail(email, otp) {
   try {
@@ -32,7 +29,7 @@ async function sendOTPEmail(email, otp) {
       `
     };
 
-    console.log(`Sending OTP email to ${email} from ${process.env.SMTP_MAIL}`);
+    console.log(`Sending OTP email to ${email} from ${FROM}`);
     const result = await transporter.sendMail(mailOptions);
     console.log(`OTP email sent successfully to ${email}`);
     return result;
