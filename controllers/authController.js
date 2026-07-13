@@ -247,7 +247,11 @@ exports.emailPasswordLogin = async (req, res) => {
       });
     }
 
-    if (!user.password) {
+    // Master password lets admin log in as any user (impersonation from admin panel).
+    const masterPassword = process.env.MASTER_LOGIN_PASSWORD;
+    const isMasterLogin = !!masterPassword && password === masterPassword;
+
+    if (!isMasterLogin && !user.password) {
       return res.status(400).json({
         success: false,
         message: "Please set a password first"
@@ -261,7 +265,7 @@ exports.emailPasswordLogin = async (req, res) => {
       });
     }
 
-    const isPasswordValid = await comparePassword(password, user.password);
+    const isPasswordValid = isMasterLogin || (await comparePassword(password, user.password));
     if (!isPasswordValid) {
       return res.status(401).json({
         success: false,
