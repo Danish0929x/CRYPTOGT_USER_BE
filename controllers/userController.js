@@ -36,6 +36,8 @@ exports.getUser = async (req, res) => {
         name: user.name,
         email: user.email,
         phone: user.phone,
+        accountNumber: user.accountNumber,
+        ifscCode: user.ifscCode,
         parentId: user.parentId,
         status: user.status
       },
@@ -54,7 +56,7 @@ exports.getUser = async (req, res) => {
 exports.updateUser = async (req, res) => {
   const walletAddress = req.user.walletAddress;
   try {
-    const { name, walletAddress: newWalletAddress } = req.body;
+    const { name, walletAddress: newWalletAddress, accountNumber, ifscCode } = req.body;
 
     // Validate walletAddress matches authenticated user
     if (!walletAddress) {
@@ -68,6 +70,8 @@ exports.updateUser = async (req, res) => {
     const updates = {};
     if (name !== undefined) updates.name = name;
     if (newWalletAddress !== undefined) updates.walletAddress = newWalletAddress;
+    if (accountNumber !== undefined) updates.accountNumber = accountNumber;
+    if (ifscCode !== undefined) updates.ifscCode = ifscCode;
 
     // If nothing to update
     if (Object.keys(updates).length === 0) {
@@ -100,6 +104,8 @@ exports.updateUser = async (req, res) => {
         name: updatedUser.name,
         email: updatedUser.email,
         phone: updatedUser.phone,
+        accountNumber: updatedUser.accountNumber,
+        ifscCode: updatedUser.ifscCode,
         walletAddress: updatedUser.walletAddress,
         parentId: updatedUser.parentId
       },

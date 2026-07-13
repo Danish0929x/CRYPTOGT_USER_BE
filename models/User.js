@@ -26,6 +26,14 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    accountNumber: {
+      type: String,
+      default: null,
+    },
+    ifscCode: {
+      type: String,
+      default: null,
+    },
     parentId: {
       type: String,
       required: true,
