@@ -1143,7 +1143,26 @@ exports.getHybridSalaryReward = async (req, res) => {
           },
         ]);
 
-        const totalHybridInvestment = investmentResult[0]?.totalInvestment || 0;
+        // Sum regular packages (Leader/Investor/Hybrid buys) for the same
+        // downline. Count everything except still-pending "Requested" records.
+        const packageResult = await Package.aggregate([
+          {
+            $match: {
+              userId: { $in: allUserIds },
+              status: { $ne: "Requested" },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              totalInvestment: { $sum: "$packageAmount" },
+            },
+          },
+        ]);
+
+        const hybridInvestment = investmentResult[0]?.totalInvestment || 0;
+        const packageInvestment = packageResult[0]?.totalInvestment || 0;
+        const totalHybridInvestment = hybridInvestment + packageInvestment;
 
         // Count direct children of this child
         const directChildCount = await User.countDocuments({
