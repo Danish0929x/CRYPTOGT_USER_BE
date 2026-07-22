@@ -1127,8 +1127,8 @@ exports.getHybridSalaryReward = async (req, res) => {
           child.userId,
         ];
 
-        // Only count packages with a start date on/after 10th July 2026.
-        const packageCutoffDate = new Date("2026-07-10T00:00:00.000Z");
+        // Only count packages with a start date on/after 1st July 2026.
+        const packageCutoffDate = new Date("2026-07-01T00:00:00.000Z");
 
         // Sum hybrid packages for this child and all their descendants
         const investmentResult = await HybridPackage.aggregate([
