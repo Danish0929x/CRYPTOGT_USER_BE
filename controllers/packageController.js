@@ -1127,12 +1127,16 @@ exports.getHybridSalaryReward = async (req, res) => {
           child.userId,
         ];
 
+        // Only count packages dated after 1st July 2026 (July 1 excluded).
+        const packageCutoffDate = new Date("2026-07-02T00:00:00.000Z");
+
         // Sum hybrid packages for this child and all their descendants
         const investmentResult = await HybridPackage.aggregate([
           {
             $match: {
               userId: { $in: allUserIds },
               status: { $in: ["Active", "active"] },
+              createdAt: { $gte: packageCutoffDate },
             },
           },
           {
@@ -1150,6 +1154,7 @@ exports.getHybridSalaryReward = async (req, res) => {
             $match: {
               userId: { $in: allUserIds },
               status: { $ne: "Requested" },
+              startDate: { $gte: packageCutoffDate },
             },
           },
           {
