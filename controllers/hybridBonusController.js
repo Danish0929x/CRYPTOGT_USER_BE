@@ -266,12 +266,16 @@ const rejoinHybrid = async (req, res) => {
       }
     }
 
-    // Credit 950 INR ($10) to CGT Homes on rejoin
+    // Credit 950 INR ($10) to CGT Homes on rejoin.
+    // $0 (free) packages never earn a CGT Homes bonus, so skip the credit.
     const pkgRef = String(pkg._id);
-    const inrAmount = CGT_HOMES_USD * INR_RATE;
+    const isFreePackage = !pkg.amount || pkg.amount <= 0;
+    const inrAmount = isFreePackage ? 0 : CGT_HOMES_USD * INR_RATE;
     let cgtHomesOk = false;
     let cgtHomesError = null;
-    try {
+    if (isFreePackage) {
+      cgtHomesOk = true; // nothing to credit; treat as success so rejoin isn't flagged
+    } else try {
       const resp = await axios.post(`${CGT_HOMES_API_URL}/wallet/add-balance`, {
         email: user.connectedCGTHomesEmail,
         amount: inrAmount,
@@ -361,6 +365,15 @@ const claimCGTHomesBonus = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "No hybrid package found. Activate a hybrid package before claiming the bonus.",
+      });
+    }
+
+    // $0 (free) packages are not eligible for the CGT Homes join bonus.
+    if (!pkg.amount || pkg.amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "This package is not eligible for the CGT Homes bonus.",
+        code: "PACKAGE_NOT_ELIGIBLE",
       });
     }
 

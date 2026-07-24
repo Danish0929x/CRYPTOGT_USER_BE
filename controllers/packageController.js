@@ -394,8 +394,13 @@ exports.createHybridPackage = async (req, res) => {
       await parentPackage.save();
     }
 
+    // $0 pins create a package but do NOT reward the sponsor in any way:
+    // they don't fill the sponsor's matrix (so no upward matrix rewards) and
+    // grant no direct 25% bonus. Both are gated on a positive amount.
+    const isFreePackage = hybridAmount <= 0;
+
     // Save matrixLeft/matrixRight on sponsor's hybrid package and trigger matrix entry
-    if (user.parentId) {
+    if (user.parentId && !isFreePackage) {
       try {
         const sponsorHybridPkg = await HybridPackage.findOne({ userId: user.parentId });
 
@@ -417,7 +422,7 @@ exports.createHybridPackage = async (req, res) => {
     }
 
     // Credit 25% of hybrid package amount to parent's hybrid balance
-    if (user.parentId) {
+    if (user.parentId && !isFreePackage) {
       try {
         const parentWallet = await Wallet.findOne({ userId: user.parentId });
         if (parentWallet) {

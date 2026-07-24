@@ -13,7 +13,7 @@ const pinSchema = new mongoose.Schema(
     packageType: {
       type: Number,
       required: true,
-      enum: [10, 50, 100],
+      enum: [0, 10, 50, 100],
     },
     activated: {
       type: Boolean,
