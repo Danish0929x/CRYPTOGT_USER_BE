@@ -1,5 +1,6 @@
 const Package = require("../models/Packages");
 const HybridPackage = require("../models/HybridPackage");
+const MatrixPackage = require("../models/MatrixPackage");
 const Transaction = require("../models/Transaction");
 const { distributeDirectBonus } = require("../functions/directDistributeBonus");
 const getLiveRate = require("../utils/liveRateUtils");
@@ -399,7 +400,9 @@ exports.createHybridPackage = async (req, res) => {
     // grant no direct 25% bonus. Both are gated on a positive amount.
     const isFreePackage = hybridAmount <= 0;
 
-    // Save matrixLeft/matrixRight on sponsor's hybrid package and trigger matrix entry
+    // Record the sponsor's first two direct referrals (informational — feeds the
+    // hybrid matrix tree display). This no longer triggers matrix entry; entry is
+    // now balance-driven (see the matrix-entry block below).
     if (user.parentId && !isFreePackage) {
       try {
         const sponsorHybridPkg = await HybridPackage.findOne({ userId: user.parentId });
@@ -411,13 +414,10 @@ exports.createHybridPackage = async (req, res) => {
           } else if (!sponsorHybridPkg.matrixRight) {
             sponsorHybridPkg.matrixRight = userId;
             await sponsorHybridPkg.save();
-
-            // 2nd direct filled — sponsor enters matrix
-            await enterMatrix(user.parentId);
           }
         }
       } catch (matrixError) {
-        // Matrix entry failure should not block hybrid package creation
+        // Slot recording failure should not block hybrid package creation
       }
     }
 
@@ -433,6 +433,52 @@ exports.createHybridPackage = async (req, res) => {
       } catch (walletError) {
         console.error("Error crediting parent hybrid balance:", walletError);
         // Don't block package creation if wallet credit fails
+      }
+    }
+
+    // Balance-driven matrix entry: once the parent's accumulated hybrid bonus
+    // reaches the $5 HM1-P1 entry fee (e.g. one $50 direct → $12.5, or several
+    // smaller directs adding up), deduct $5 from hybridBalance and place them in
+    // the matrix. Charged exactly once: we skip if already placed, and refund the
+    // $5 if placement didn't actually happen (already-in / concurrent race — the
+    // unique userId+hm+part index makes enterMatrix idempotent).
+    const MATRIX_ENTRY_FEE = 5;
+    if (user.parentId && !isFreePackage) {
+      try {
+        const alreadyInMatrix = await MatrixPackage.findOne({
+          userId: user.parentId,
+          hm: 1,
+          part: 1,
+        });
+
+        if (!alreadyInMatrix) {
+          const parentWallet = await Wallet.findOne({ userId: user.parentId });
+          if (parentWallet && parentWallet.hybridBalance >= MATRIX_ENTRY_FEE) {
+            // Deduct first (logged as a Transaction), then place.
+            await performWalletTransaction(
+              user.parentId,
+              -MATRIX_ENTRY_FEE,
+              "hybridBalance",
+              "Matrix Entry Fee (HM1-P1) - $5",
+              "Completed"
+            );
+
+            const entryResult = await enterMatrix(user.parentId);
+            if (!entryResult || !entryResult.success) {
+              // Placement did not happen — refund the entry fee.
+              await performWalletTransaction(
+                user.parentId,
+                MATRIX_ENTRY_FEE,
+                "hybridBalance",
+                "Matrix Entry Fee refund (entry not placed)",
+                "Completed"
+              );
+            }
+          }
+        }
+      } catch (matrixEntryError) {
+        console.error("Error during balance-driven matrix entry:", matrixEntryError);
+        // Never block hybrid package creation on matrix entry.
       }
     }
 
