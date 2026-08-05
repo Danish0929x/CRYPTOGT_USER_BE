@@ -1119,9 +1119,26 @@ exports.getMatrixTreeFromHybrid = async (req, res) => {
   }
 };
 
+// Business stats roll over at IST midnight, not UTC midnight — the user base is
+// in India, so a UTC boundary would reset "today" at 5:30am local.
+const BUSINESS_TZ_OFFSET_MIN = 330;
+
+const businessWindowStarts = () => {
+  const offsetMs = BUSINESS_TZ_OFFSET_MIN * 60 * 1000;
+  const local = new Date(Date.now() + offsetMs);
+  const startOfDay = new Date(
+    Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()) - offsetMs
+  );
+  const startOfMonth = new Date(
+    Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), 1) - offsetMs
+  );
+  return { startOfDay, startOfMonth };
+};
+
 exports.getHybridSalaryReward = async (req, res) => {
   try {
     const userId = req.user.userId;
+    const { startOfDay, startOfMonth } = businessWindowStarts();
 
     // Get all direct children of current user
     const directChildren = await User.find(
@@ -1136,6 +1153,8 @@ exports.getHybridSalaryReward = async (req, res) => {
         data: {
           strongLegs: [],
           allLegs: [],
+          todayBusiness: 0,
+          monthBusiness: 0,
         },
       });
     }
@@ -1181,6 +1200,19 @@ exports.getHybridSalaryReward = async (req, res) => {
         // Only count packages with a start date on/after 1st July 2026.
         const packageCutoffDate = new Date("2026-07-01T00:00:00.000Z");
 
+        // All-time / today / this-month are summed in a single pass per
+        // collection — the $cond buckets cost nothing extra over the same scan.
+        const windowedSum = (amountField, dateField) => ({
+          _id: null,
+          totalInvestment: { $sum: amountField },
+          todayInvestment: {
+            $sum: { $cond: [{ $gte: [dateField, startOfDay] }, amountField, 0] },
+          },
+          monthInvestment: {
+            $sum: { $cond: [{ $gte: [dateField, startOfMonth] }, amountField, 0] },
+          },
+        });
+
         // Sum hybrid packages for this child and all their descendants
         const investmentResult = await HybridPackage.aggregate([
           {
@@ -1190,12 +1222,7 @@ exports.getHybridSalaryReward = async (req, res) => {
               createdAt: { $gte: packageCutoffDate },
             },
           },
-          {
-            $group: {
-              _id: null,
-              totalInvestment: { $sum: "$amount" },
-            },
-          },
+          { $group: windowedSum("$amount", "$createdAt") },
         ]);
 
         // Sum regular packages (Leader/Investor/Hybrid buys) for the same
@@ -1208,17 +1235,15 @@ exports.getHybridSalaryReward = async (req, res) => {
               startDate: { $gte: packageCutoffDate },
             },
           },
-          {
-            $group: {
-              _id: null,
-              totalInvestment: { $sum: "$packageAmount" },
-            },
-          },
+          { $group: windowedSum("$packageAmount", "$startDate") },
         ]);
 
-        const hybridInvestment = investmentResult[0]?.totalInvestment || 0;
-        const packageInvestment = packageResult[0]?.totalInvestment || 0;
-        const totalHybridInvestment = hybridInvestment + packageInvestment;
+        const hybrid = investmentResult[0] || {};
+        const regular = packageResult[0] || {};
+        const totalHybridInvestment =
+          (hybrid.totalInvestment || 0) + (regular.totalInvestment || 0);
+        const todayBusiness = (hybrid.todayInvestment || 0) + (regular.todayInvestment || 0);
+        const monthBusiness = (hybrid.monthInvestment || 0) + (regular.monthInvestment || 0);
 
         // Count direct children of this child
         const directChildCount = await User.countDocuments({
@@ -1229,6 +1254,8 @@ exports.getHybridSalaryReward = async (req, res) => {
           userId: child.userId,
           name: child.name || "Unknown",
           totalHybridInvestment,
+          todayBusiness,
+          monthBusiness,
           directChildCount,
           joinDate: child.createdAt,
         };
@@ -1252,6 +1279,7 @@ exports.getHybridSalaryReward = async (req, res) => {
       (sum, leg) => sum + leg.directChildCount,
       0
     );
+    const sumBy = (legs, key) => legs.reduce((sum, leg) => sum + (leg[key] || 0), 0);
 
     const strongLegs = [
       strongLeg,
@@ -1259,6 +1287,8 @@ exports.getHybridSalaryReward = async (req, res) => {
         userId: "combined",
         name: "Weak Leg (Combined)",
         totalHybridInvestment: weakLegTotalInvestment,
+        todayBusiness: sumBy(remainingLegs, "todayBusiness"),
+        monthBusiness: sumBy(remainingLegs, "monthBusiness"),
         directChildCount: weakLegDirectChildCount,
         joinDate: new Date(),
       },
@@ -1270,6 +1300,9 @@ exports.getHybridSalaryReward = async (req, res) => {
       data: {
         strongLegs,
         allLegs: sortedLegs,
+        // Whole-team business, not just the two legs shown above.
+        todayBusiness: sumBy(sortedLegs, "todayBusiness"),
+        monthBusiness: sumBy(sortedLegs, "monthBusiness"),
       },
     });
   } catch (error) {
