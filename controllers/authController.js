@@ -7,6 +7,9 @@ const { sendOTPEmail, sendTemporaryPasswordEmail } = require("../utils/emailServ
 const { sendOTP, sendCustomOTP, verifyOTP } = require("../utils/smsService");
 const ResetOtp = require("../models/ResetOtp");
 
+// Maximum number of user accounts (IDs) that may share a single email address.
+const MAX_ACCOUNTS_PER_EMAIL = 5;
+
 // --- Password-reset OTP helpers ---------------------------------------------
 const hashOTP = (otp) => crypto.createHash("sha256").update(String(otp)).digest("hex");
 
@@ -71,12 +74,15 @@ exports.register = async (req, res) => {
           message: "Email and password are required"
         });
       }
+    }
 
-      const existingEmail = await User.findOne({ email: email.toLowerCase() });
-      if (existingEmail) {
+    // One email address may be linked to up to MAX 5 accounts (IDs).
+    if (email) {
+      const emailCount = await User.countDocuments({ email: email.toLowerCase() });
+      if (emailCount >= MAX_ACCOUNTS_PER_EMAIL) {
         return res.status(400).json({
           success: false,
-          message: "Email already registered"
+          message: `This email has reached the maximum limit of ${MAX_ACCOUNTS_PER_EMAIL} accounts`
         });
       }
     }
